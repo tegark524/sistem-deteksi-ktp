@@ -1,7 +1,8 @@
 streamlit
-pandas
-numpy
 easyocr
 opencv-python-headless
+pandas
+numpy
 Pillow
 xlsxwriter
+openpyxl
