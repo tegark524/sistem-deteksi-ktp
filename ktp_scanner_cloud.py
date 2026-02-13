@@ -1,31 +1,26 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import easyocr
 import cv2
 import re
 import io
 import concurrent.futures
 from PIL import Image
+import pytesseract
 
-# --- CONFIG & OCR ---
-st.set_page_config(page_title="KTP Scanner Pro v4.3", layout="wide")
+# --- CONFIG ---
+st.set_page_config(page_title="KTP Scanner Pro v4.3 (Cloud)", layout="wide")
 
 # Custom CSS untuk better UX
 st.markdown("""
 <style>
-    /* Highlight focused input */
     .stTextInput input:focus {
         border-color: #4CAF50 !important;
         box-shadow: 0 0 8px rgba(76, 175, 80, 0.6) !important;
     }
-    
-    /* Smooth scroll behavior */
     html {
         scroll-behavior: smooth;
     }
-    
-    /* Card styling */
     div[data-testid="column"] {
         background-color: #f8f9fa;
         padding: 1rem;
@@ -35,14 +30,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-@st.cache_resource
-def load_ocr():
-    # Gunakan hanya 'id' (Indonesia) saja untuk meringankan beban RAM
-    return easyocr.Reader(['id'], gpu=False, download_enabled=True)
-
-reader = load_ocr()
-
-# --- FUNGSI EKSTRAKSI ASLI TEGAR (PROTECTED) ---
+# --- FUNGSI EKSTRAKSI ---
 
 def clean_nik_advanced(text):
     text = text.upper().replace(" ", "").replace(":", "").replace("-", "")
@@ -99,25 +87,31 @@ def extract_nama(text_list):
         if len(clean_txt) > len(longest_text) and len(clean_txt) > 8: longest_text = clean_txt
     return fix_nama_typo(longest_text) if longest_text else ""
 
-# --- WORKER PROCESS ---
+# --- WORKER PROCESS dengan Tesseract ---
 def worker_process(file_item, thumbnail_size=400):
     try:
         f_bytes = file_item.getvalue()
         nparr = np.frombuffer(f_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         h, w = img.shape[:2]
+        
+        # Resize untuk OCR
         img_ocr = cv2.resize(img, (1500, int(h * (1500/w))), interpolation=cv2.INTER_CUBIC)
         gray = cv2.cvtColor(img_ocr, cv2.COLOR_BGR2GRAY)
-        processed = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        results = reader.readtext(processed)
-        text_list = [r[1] for r in results]
+        # Preprocessing untuk Tesseract
+        gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
+        gray = cv2.medianBlur(gray, 3)
         
-        # Simpan gambar original sebagai bytes
+        # OCR dengan Tesseract
+        custom_config = r'--oem 3 --psm 6'
+        text = pytesseract.image_to_string(gray, lang='ind+eng', config=custom_config)
+        text_list = [line.strip() for line in text.split('\n') if line.strip()]
+        
+        # Simpan gambar preview
         preview_img = Image.open(io.BytesIO(f_bytes))
         preview_img.thumbnail((thumbnail_size, thumbnail_size))
         
-        # Convert to bytes
         img_buffer = io.BytesIO()
         preview_img.save(img_buffer, format='JPEG', quality=90)
         img_buffer.seek(0)
@@ -133,8 +127,8 @@ def worker_process(file_item, thumbnail_size=400):
         return None
 
 # --- UI MAIN ---
-st.title("BRI KTP Scanner")
-st.caption("Card Layout - Auto Save + Excel Preview Table")
+st.title("🎯 KTP Scanner Pro - v4.3 Cloud")
+st.caption("Card Layout - Auto Save + Excel Preview (Optimized for Streamlit Cloud)")
 
 # Sidebar settings
 st.sidebar.header("⚙️ Pengaturan")
@@ -178,16 +172,15 @@ if 'data_db' not in st.session_state:
 if 'processed_files' not in st.session_state:
     st.session_state.processed_files = set()
 
-uploaded_files = st.file_uploader("📤 Upload KTP (Bisa Lebih Dari Satu)", type=['jpg','png','jpeg'], accept_multiple_files=True)
+uploaded_files = st.file_uploader("📤 Upload KTP (Batch)", type=['jpg','png','jpeg'], accept_multiple_files=True)
 
 button_placeholder = st.container()
 status_placeholder = st.container()
 
-# Display data as cards - AUTO SAVE ON CHANGE
+# Display data as cards
 if st.session_state.data_db:
     st.divider()
     
-    # Progress indicator
     col_title, col_progress = st.columns([3, 1])
     with col_title:
         st.subheader(f"📋 Data KTP Terdeteksi")
@@ -196,7 +189,6 @@ if st.session_state.data_db:
         filled = sum(1 for r in st.session_state.data_db if r.get("NAMA") and r.get("NOMORIDENTITAS"))
         st.metric("Progress", f"{filled}/{total}")
     
-    # Group cards into rows
     for i in range(0, len(st.session_state.data_db), cards_per_row):
         cols = st.columns(cards_per_row)
         
@@ -208,9 +200,7 @@ if st.session_state.data_db:
             row = st.session_state.data_db[idx]
             
             with cols[j]:
-                # Card container
                 with st.container():
-                    # Header dengan nomor KTP
                     col_h1, col_h2 = st.columns([3, 1])
                     with col_h1:
                         st.markdown(f"### 🆔 KTP #{idx + 1}")
@@ -219,16 +209,12 @@ if st.session_state.data_db:
                             st.session_state.data_db.pop(idx)
                             st.rerun()
                     
-                    # Preview Image - BIG
                     if row.get("IMAGE_DATA"):
                         st.image(row["IMAGE_DATA"], width=preview_width, use_container_width=False)
                     
                     st.divider()
-                    
-                    # Form inputs - AUTO SAVE dengan on_change
                     st.markdown("**📝 Data KTP**")
                     
-                    # Field 1: Nama
                     label_nama = "1️⃣ Nama Lengkap" if show_field_numbers else "Nama Lengkap"
                     new_nama = st.text_input(
                         label_nama,
@@ -240,7 +226,6 @@ if st.session_state.data_db:
                     if new_nama != row["NAMA"]:
                         st.session_state.data_db[idx]["NAMA"] = new_nama
                     
-                    # Field 2: NIK
                     label_nik = "2️⃣ NIK (16 digit)" if show_field_numbers else "NIK (16 digit)"
                     new_nik = st.text_input(
                         label_nik,
@@ -255,7 +240,6 @@ if st.session_state.data_db:
                     
                     st.markdown("**ℹ️ Informasi Tambahan**")
                     
-                    # Field 3: Nama Ibu
                     label_ibu = "3️⃣ Nama Gadis Ibu" if show_field_numbers else "Nama Gadis Ibu"
                     new_ibu = st.text_input(
                         label_ibu,
@@ -267,7 +251,6 @@ if st.session_state.data_db:
                     if new_ibu != row.get("NAMA GADIS IBU", ""):
                         st.session_state.data_db[idx]["NAMA GADIS IBU"] = new_ibu
                     
-                    # Field 4 & 5: CIF dan HP (side by side)
                     col1, col2 = st.columns(2)
                     with col1:
                         label_cif = "4️⃣ CIF No" if show_field_numbers else "CIF No"
@@ -293,19 +276,17 @@ if st.session_state.data_db:
                         if new_hp != row.get("NO HP", ""):
                             st.session_state.data_db[idx]["NO HP"] = new_hp
                     
-                    # Field 6: Email
                     label_email = "6️⃣ Email" if show_field_numbers else "Email"
                     new_email = st.text_input(
                         label_email,
                         value=row.get("EMAIL", ""),
                         key=f"email_{idx}",
                         placeholder="email@example.com",
-                        help="Field terakhir - Tab untuk ke tombol atau scroll ke KTP berikutnya"
+                        help="Field terakhir"
                     )
                     if new_email != row.get("EMAIL", ""):
                         st.session_state.data_db[idx]["EMAIL"] = new_email
                     
-                    # Status indicator
                     if new_nama and new_nik:
                         st.success("✅ Data lengkap tersimpan otomatis")
                     elif new_nama or new_nik:
@@ -337,7 +318,7 @@ with button_placeholder:
                                 "EMAIL": ""
                             })
                             st.session_state.processed_files.add(res["FILENAME"])
-                        txt.info(f"⏳ Sedang memproses file baru: {i+1}/{len(new_files)}...")
+                        txt.info(f"⏳ Sedang memproses: {i+1}/{len(new_files)}...")
                         bar.progress((i + 1) / len(new_files))
                 
                 st.toast("✅ Scanning Selesai!", icon="✅")
@@ -345,15 +326,13 @@ with button_placeholder:
                 bar.empty()
                 st.rerun()
 
-# Download & Clear
+# Preview & Download
 if st.session_state.data_db:
     st.divider()
     
-    # Preview Tabel Excel
     st.subheader("📊 Preview Data Excel (Siap Download)")
     st.caption("Tabel di bawah ini adalah preview data yang akan di-download (tanpa foto)")
     
-    # Buat dataframe untuk preview
     df_preview = []
     for idx, row in enumerate(st.session_state.data_db):
         df_preview.append({
@@ -368,7 +347,6 @@ if st.session_state.data_db:
     
     df_display = pd.DataFrame(df_preview)
     
-    # Tampilkan sebagai dataframe (non-editable, pure preview)
     st.dataframe(
         df_display,
         use_container_width=True,
@@ -389,7 +367,6 @@ if st.session_state.data_db:
     c1, c2, c3 = st.columns([2, 2, 1])
     
     with c1:
-        # Export Excel tanpa kolom IMAGE_DATA
         df_export = []
         for idx, row in enumerate(st.session_state.data_db):
             df_export.append({
@@ -423,10 +400,10 @@ if st.session_state.data_db:
                 st.rerun()
             else:
                 st.session_state.confirm_delete = True
-                st.warning("⚠️ Klik sekali lagi untuk konfirmasi hapus semua data!")
+                st.warning("⚠️ Klik sekali lagi untuk konfirmasi!")
     
     with c3:
         st.metric("Total KTP", len(st.session_state.data_db))
 
 st.divider()
-st.caption("Dev By UPN VETERAN JATIM Internship Group feb 2026")
+st.caption("v4.3 Cloud - Optimized with Tesseract OCR ⚡")
