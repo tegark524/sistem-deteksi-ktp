@@ -8,23 +8,91 @@ import concurrent.futures
 from PIL import Image
 
 # --- CONFIG ---
-st.set_page_config(page_title="KTP Scanner Pro v4.3", layout="wide")
+st.set_page_config(
+    page_title="BRI KTP Digital Scanner", 
+    page_icon="🏦",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
 
-# Custom CSS
+# Custom CSS dengan warna BRI
 st.markdown("""
 <style>
-    .stTextInput input:focus {
-        border-color: #4CAF50 !important;
-        box-shadow: 0 0 8px rgba(76, 175, 80, 0.6) !important;
+    /* BRI Color Scheme */
+    :root {
+        --bri-blue: #0067B8;
+        --bri-dark-blue: #004A8F;
+        --bri-light-blue: #E8F4FD;
+        --bri-white: #FFFFFF;
     }
+    
+    /* Header dengan gradient BRI */
+    .main-header {
+        background: linear-gradient(135deg, #0067B8 0%, #004A8F 100%);
+        padding: 2rem;
+        border-radius: 10px;
+        margin-bottom: 2rem;
+        box-shadow: 0 4px 6px rgba(0, 103, 184, 0.2);
+    }
+    
+    /* Text input focus dengan warna BRI */
+    .stTextInput input:focus {
+        border-color: #0067B8 !important;
+        box-shadow: 0 0 8px rgba(0, 103, 184, 0.4) !important;
+    }
+    
+    /* Button primary dengan warna BRI */
+    .stButton > button[kind="primary"] {
+        background-color: #0067B8 !important;
+        border-color: #0067B8 !important;
+    }
+    
+    .stButton > button[kind="primary"]:hover {
+        background-color: #004A8F !important;
+        border-color: #004A8F !important;
+    }
+    
+    /* Progress bar dengan warna BRI */
+    .stProgress > div > div > div > div {
+        background-color: #0067B8;
+    }
+    
+    /* Sidebar dengan aksen BRI */
+    [data-testid="stSidebar"] {
+        background-color: #F8FBFF;
+        border-right: 3px solid #0067B8;
+    }
+    
+    /* Card container dengan border BRI */
+    div[data-testid="column"] {
+        background-color: #FFFFFF;
+        padding: 1.5rem;
+        border-radius: 12px;
+        border: 2px solid #E8F4FD;
+        margin-bottom: 1.5rem;
+        box-shadow: 0 2px 8px rgba(0, 103, 184, 0.08);
+    }
+    
+    /* Success message dengan warna BRI */
+    .element-container .stSuccess {
+        background-color: #E8F4FD;
+        border-left: 4px solid #0067B8;
+    }
+    
+    /* Metrics dengan style BRI */
+    [data-testid="stMetricValue"] {
+        color: #0067B8;
+        font-weight: 700;
+    }
+    
+    /* Smooth scroll */
     html {
         scroll-behavior: smooth;
     }
-    div[data-testid="column"] {
-        background-color: #f8f9fa;
-        padding: 1rem;
-        border-radius: 10px;
-        margin-bottom: 1rem;
+    
+    /* Divider dengan warna BRI */
+    hr {
+        border-color: #E8F4FD;
     }
 </style>
 """, unsafe_allow_html=True)
@@ -142,51 +210,67 @@ def worker_process(file_item, thumbnail_size, reader):
         return None
 
 # --- UI MAIN ---
-st.title("🎯 KTP Scanner Pro - v4.3")
-st.caption("Card Layout - Auto Save + Excel Preview")
+# Header dengan branding BRI
+st.markdown("""
+<div class="main-header">
+    <h1 style="color: white; margin: 0; font-size: 2.5rem;">
+        🏦 BRI KTP Digital Scanner
+    </h1>
+    <p style="color: #E8F4FD; margin: 0.5rem 0 0 0; font-size: 1.1rem;">
+        Sistem Digitalisasi Data Nasabah - Bank Rakyat Indonesia
+    </p>
+</div>
+""", unsafe_allow_html=True)
+
+st.caption("✨ Powered by EasyOCR Technology | v4.3 BRI Edition")
 
 # Sidebar settings
-st.sidebar.header("⚙️ Pengaturan")
+st.sidebar.markdown("### ⚙️ Pengaturan Sistem")
+st.sidebar.markdown("---")
 
-st.sidebar.success("""
-**⌨️ CARA CEPAT INPUT:**
-1. **TAB** = Pindah field berikutnya
-2. Isi data sambil lihat foto
-3. Data **auto-save** saat pindah field
-4. Scroll ke card berikutnya
-5. Ulangi!
+st.sidebar.info("""
+**⌨️ PANDUAN PENGGUNAAN:**
+1. Upload foto KTP nasabah
+2. Klik **MULAI SCANNING**
+3. **TAB** = Pindah antar field
+4. Data tersimpan otomatis
+5. Download Excel untuk arsip
 
-💡 **Tip:** Pakai Tab terus, jangan Enter!
-""")
+💡 **Tips:** Gunakan foto KTP yang jelas & pencahayaan baik
+""", icon="ℹ️")
 
 st.sidebar.warning("""
-**⚠️ Cloud Limits:**
-- Max 3-5 KTP per batch
-- Gunakan foto <2MB
-- Jika crash, refresh page
-""")
+**⚠️ Batasan Sistem Cloud:**
+- Maksimal 5 KTP per sesi
+- Ukuran foto: < 2MB per file
+- Jika terjadi error, refresh halaman
+- Gunakan koneksi internet stabil
+""", icon="⚠️")
+
+st.sidebar.markdown("---")
+st.sidebar.markdown("**🎨 Kustomisasi Tampilan**")
 
 preview_width = st.sidebar.slider(
-    "📏 Lebar Preview KTP",
+    "📏 Ukuran Preview KTP",
     min_value=300,
     max_value=700,
     value=500,
     step=50,
-    help="Atur lebar preview KTP di card"
+    help="Sesuaikan ukuran tampilan foto KTP"
 )
 
 cards_per_row = st.sidebar.radio(
-    "📐 Cards Per Baris",
+    "📐 Layout Tampilan",
     options=[1, 2],
     index=0,
-    help="Rekomendasi: 1 card (full width) untuk input lebih nyaman",
-    format_func=lambda x: f"{x} Card (Full Width)" if x == 1 else f"{x} Cards"
+    help="Pilih jumlah kartu per baris",
+    format_func=lambda x: f"1 Kartu (Lebar Penuh)" if x == 1 else f"2 Kartu (Berdampingan)"
 )
 
 show_field_numbers = st.sidebar.checkbox(
-    "🔢 Tampilkan Nomor Urut Field",
+    "🔢 Tampilkan Urutan Nomor",
     value=True,
-    help="Tampilkan 1️⃣ 2️⃣ 3️⃣ di label field"
+    help="Tampilkan penanda urutan di setiap kolom input"
 )
 
 if 'data_db' not in st.session_state:
@@ -195,9 +279,10 @@ if 'processed_files' not in st.session_state:
     st.session_state.processed_files = set()
 
 uploaded_files = st.file_uploader(
-    "📤 Upload KTP (Max 5 foto untuk Streamlit Cloud)", 
+    "📤 Upload Foto KTP Nasabah (Maksimal 5 foto)", 
     type=['jpg','png','jpeg'], 
-    accept_multiple_files=True
+    accept_multiple_files=True,
+    help="Format: JPG, PNG, JPEG | Ukuran maks: 2MB per file"
 )
 
 button_placeholder = st.container()
@@ -209,11 +294,11 @@ if st.session_state.data_db:
     
     col_title, col_progress = st.columns([3, 1])
     with col_title:
-        st.subheader(f"📋 Data KTP Terdeteksi")
+        st.subheader(f"📋 Data Nasabah Terdeteksi")
     with col_progress:
         total = len(st.session_state.data_db)
         filled = sum(1 for r in st.session_state.data_db if r.get("NAMA") and r.get("NOMORIDENTITAS"))
-        st.metric("Progress", f"{filled}/{total}")
+        st.metric("Progres Input", f"{filled}/{total}")
     
     for i in range(0, len(st.session_state.data_db), cards_per_row):
         cols = st.columns(cards_per_row)
@@ -229,7 +314,7 @@ if st.session_state.data_db:
                 with st.container():
                     col_h1, col_h2 = st.columns([3, 1])
                     with col_h1:
-                        st.markdown(f"### 🆔 KTP #{idx + 1}")
+                        st.markdown(f"### 💳 Nasabah #{idx + 1}")
                     with col_h2:
                         if st.button("🗑️", key=f"del_{idx}", help="Hapus KTP ini"):
                             st.session_state.data_db.pop(idx)
@@ -239,7 +324,7 @@ if st.session_state.data_db:
                         st.image(row["IMAGE_DATA"], width=preview_width, use_container_width=False)
                     
                     st.divider()
-                    st.markdown("**📝 Data KTP**")
+                    st.markdown("**📝 Informasi Identitas**")
                     
                     label_nama = "1️⃣ Nama Lengkap" if show_field_numbers else "Nama Lengkap"
                     new_nama = st.text_input(
@@ -264,7 +349,7 @@ if st.session_state.data_db:
                     if new_nik != row["NOMORIDENTITAS"]:
                         st.session_state.data_db[idx]["NOMORIDENTITAS"] = new_nik
                     
-                    st.markdown("**ℹ️ Informasi Tambahan**")
+                    st.markdown("**ℹ️ Data Pelengkap Nasabah**")
                     
                     label_ibu = "3️⃣ Nama Gadis Ibu" if show_field_numbers else "Nama Gadis Ibu"
                     new_ibu = st.text_input(
@@ -326,16 +411,16 @@ with button_placeholder:
         
         # LIMIT untuk cloud
         if len(new_files) > 5:
-            st.warning("⚠️ Streamlit Cloud limit: Max 5 KTP per batch. Upload ulang dalam batch kecil.")
+            st.warning("⚠️ Batasan sistem: Maksimal 5 KTP per sesi pemindaian. Silakan upload ulang dalam jumlah lebih kecil.", icon="⚠️")
             new_files = new_files[:5]
         
         if new_files:
-            if st.button("🚀 MULAI SCANNING", type="primary", use_container_width=True):
+            if st.button("🚀 MULAI PEMINDAIAN", type="primary", use_container_width=True):
                 # Load OCR
                 reader = load_ocr()
                 
                 if reader is None:
-                    st.error("❌ OCR engine failed to load. Please refresh the page.")
+                    st.error("❌ Sistem OCR gagal dimuat. Silakan refresh halaman ini.", icon="❌")
                 else:
                     with status_placeholder:
                         bar = st.progress(0)
@@ -361,7 +446,7 @@ with button_placeholder:
                         
                         bar.progress((i + 1) / len(new_files))
                     
-                    st.toast("✅ Scanning Selesai!", icon="✅")
+                    st.toast("✅ Pemindaian KTP Berhasil!", icon="✅")
                     txt.empty()
                     bar.empty()
                     st.rerun()
@@ -370,8 +455,8 @@ with button_placeholder:
 if st.session_state.data_db:
     st.divider()
     
-    st.subheader("📊 Preview Data Excel (Siap Download)")
-    st.caption("Tabel di bawah ini adalah preview data yang akan di-download (tanpa foto)")
+    st.subheader("📊 Preview Data Export Excel")
+    st.caption("Tabel berikut adalah data nasabah yang siap di-download dalam format Excel (tanpa foto KTP)")
     
     df_preview = []
     for idx, row in enumerate(st.session_state.data_db):
@@ -424,11 +509,12 @@ if st.session_state.data_db:
             df_dl.to_excel(wr, index=False, sheet_name='Data KTP')
         
         st.download_button(
-            "📥 Download Excel",
+            "📥 Download File Excel",
             buffer.getvalue(),
-            "Data_KTP.xlsx",
+            "Data_Nasabah_BRI.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
+            use_container_width=True,
+            help="Download data nasabah dalam format Excel"
         )
     
     with c2:
@@ -440,10 +526,15 @@ if st.session_state.data_db:
                 st.rerun()
             else:
                 st.session_state.confirm_delete = True
-                st.warning("⚠️ Klik sekali lagi untuk konfirmasi!")
+                st.warning("⚠️ Konfirmasi: Klik sekali lagi untuk menghapus semua data!", icon="⚠️")
     
     with c3:
-        st.metric("Total KTP", len(st.session_state.data_db))
+        st.metric("Total Nasabah", len(st.session_state.data_db))
 
 st.divider()
-st.caption("v4.3 - EasyOCR Optimized for Cloud ⚡")
+st.markdown("""
+<div style="text-align: center; color: #0067B8; padding: 1rem;">
+    <strong>Bank Rakyat Indonesia (Persero) Tbk.</strong><br>
+    <small>KTP Digital Scanner v4.3 BRI Edition | Powered by EasyOCR Technology</small>
+</div>
+""", unsafe_allow_html=True)
