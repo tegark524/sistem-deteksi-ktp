@@ -203,70 +203,12 @@ def clean_nik_advanced(text):
 
 def fix_nama_typo(nama_raw):
     if not nama_raw: return ""
-    
-    # Kamus koreksi nama yang sudah terbukti salah dari testing
-    fixes_tested = {
-        'SUGIHANTI': 'SUGIANTI', 
-        'PCATII': 'PERTIWI', 
-        'PCATI': 'PERTIWI', 
-        'PCATWI': 'PERTIWI', 
-        'MAAGI': 'MARGI', 
-        'HANJTI': 'ANTI', 
-        'ANJTI': 'ANTI'
-    }
-    
-    # Kamus nama Indonesia yang umum (untuk antisipasi kesalahan OCR)
-    common_names = {
-        # Nama depan wanita
-        'SIT1': 'SITI', 'S1TI': 'SITI', 'SlTI': 'SITI',
-        'DEW1': 'DEWI', 'DEWl': 'DEWI', 'D3WI': 'DEWI',
-        'NUR': 'NUR', 'NUH': 'NUR', 'NUB': 'NUR',
-        'SRI': 'SRI', 'SR1': 'SRI', 'SRl': 'SRI',
-        'ANI': 'ANI', 'AN1': 'ANI', 'ANl': 'ANI',
-        
-        # Nama depan pria
-        'MUHAMAD': 'MUHAMMAD', 'MUHA MAD': 'MUHAMMAD', 'MOHAMAD': 'MUHAMMAD',
-        'MOIIAMMAD': 'MUHAMMAD', 'MUIIAMMAD': 'MUHAMMAD',
-        'AOMAD': 'AHMAD', 'ACMAD': 'AHMAD', 'AHMAO': 'AHMAD',
-        'AGUS': 'AGUS', 'ACUS': 'AGUS', 'AGU5': 'AGUS',
-        'BUDI': 'BUDI', 'BUD1': 'BUDI', 'BUDl': 'BUDI',
-        
-        # Nama tengah/belakang yang sering salah
-        'RAHMAWAT1': 'RAHMAWATI', 'RAHMAWATI': 'RAHMAWATI', 'RAHMAWAT': 'RAHMAWATI',
-        'RAHMAWAN1': 'RAHMAWANI', 'RAHMAWAN': 'RAHMAWANI',
-        'SUGIARTO': 'SUGIARTO', 'SUG1ARTO': 'SUGIARTO', 'SUGlARTO': 'SUGIARTO',
-        'PRAT1WI': 'PRATIWI', 'PRATlWI': 'PRATIWI', 'PRATWI': 'PRATIWI',
-        'PERMATA': 'PERMATA', 'PCRMATA': 'PERMATA', 'PEHMATA': 'PERMATA',
-        'SUSANT1': 'SUSANTI', 'SUSANTl': 'SUSANTI', 'SUSANT': 'SUSANTI',
-        'YUDH1': 'YUDHI', 'YUDHl': 'YUDHI', 'YUDII': 'YUDHI',
-        'KUSUMO': 'KUSUMO', 'KUSUMA': 'KUSUMA', 'KU5UMO': 'KUSUMO',
-        'WIBOWO': 'WIBOWO', 'W1BOWO': 'WIBOWO', 'WlBOWO': 'WIBOWO',
-        'UTAM1': 'UTAMI', 'UTAMl': 'UTAMI', 'UTAM': 'UTAMI',
-        'SETYAN1': 'SETYANI', 'SETYANl': 'SETYANI', 'SETYANT': 'SETYANI',
-        'WIDOD0': 'WIDODO', 'WID0DO': 'WIDODO', 'WIDOD': 'WIDODO',
-        'SUHARTO': 'SUHARTO', 'SUHART0': 'SUHARTO', 'SUIIARTO': 'SUHARTO',
-        'WAHYUD1': 'WAHYUDI', 'WAHYUDl': 'WAHYUDI', 'WAHYUD': 'WAHYUDI',
-        'SUPRI': 'SUPRI', 'SUPH1': 'SUPRI', 'SUPRl': 'SUPRI',
-    }
-    
-    # Gabungkan kedua kamus (tested fixes prioritas lebih tinggi)
-    all_fixes = {**common_names, **fixes_tested}
-    
+    fixes = {'SUGIHANTI': 'SUGIANTI', 'PCATII': 'PERTIWI', 'PCATI': 'PERTIWI', 'PCATWI': 'PERTIWI', 'MAAGI': 'MARGI', 'HANJTI': 'ANTI', 'ANJTI': 'ANTI'}
     result = nama_raw
-    # Terapkan koreksi
-    for wrong, right in all_fixes.items():
+    for wrong, right in fixes.items():
         result = result.replace(wrong, right)
-    
-    # Koreksi karakter umum yang salah terbaca
-    char_fixes = {
-        '1': 'I',  # Angka 1 jadi huruf I
-        '0': 'O',  # Angka 0 jadi huruf O
-        '5': 'S',  # Angka 5 jadi huruf S
-        '8': 'B',  # Angka 8 kadang jadi B (opsional, comment jika terlalu agresif)
-    }
-    for wrong_char, right_char in char_fixes.items():
-        result = result.replace(wrong_char, right_char)
-    
+    for w, r in {'1': 'I', '0': 'O', '5': 'S'}.items():
+        result = result.replace(w, r)
     return result.strip()
 
 def extract_nik(text_list):
@@ -363,7 +305,7 @@ try:
                     BRI KTP Digital Scanner
                 </h1>
                 <p style="color: #666666; margin: 0.5rem 0 0 0; font-size: 1.1rem;">
-                    Sistem Digitalisasi Data Nasabah - Bank Rakyat Indonesia
+                    Sistem Digitalisasi Data Nasabah - Oleh Tim Magang Dev UPN "Veteran Jatim" Feb 26'
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -450,22 +392,10 @@ show_field_numbers = st.sidebar.checkbox(
     help="Tampilkan penanda urutan di setiap kolom input"
 )
 
-st.sidebar.markdown("---")
-st.sidebar.markdown("**📚 Opsi Tambahan**")
-
-show_kampus_field = st.sidebar.checkbox(
-    "🎓 Tampilkan Field Kampus",
-    value=st.session_state.show_kampus_field,
-    help="Aktifkan untuk nasabah mahasiswa/pelajar"
-)
-st.session_state.show_kampus_field = show_kampus_field
-
 if 'data_db' not in st.session_state:
     st.session_state.data_db = []
 if 'processed_files' not in st.session_state:
     st.session_state.processed_files = set()
-if 'show_kampus_field' not in st.session_state:
-    st.session_state.show_kampus_field = False
 
 uploaded_files = st.file_uploader(
     "📤 Upload Foto KTP Nasabah (Maksimal 5 foto)", 
@@ -582,23 +512,10 @@ if st.session_state.data_db:
                         value=row.get("EMAIL", ""),
                         key=f"email_{idx}",
                         placeholder="email@example.com",
-                        help="Field terakhir" if not show_kampus_field else "Tab untuk pindah ke Kampus"
+                        help="Field terakhir"
                     )
                     if new_email != row.get("EMAIL", ""):
                         st.session_state.data_db[idx]["EMAIL"] = new_email
-                    
-                    # Field Kampus (conditional)
-                    if show_kampus_field:
-                        label_kampus = "7️⃣ Kampus/Universitas" if show_field_numbers else "Kampus/Universitas"
-                        new_kampus = st.text_input(
-                            label_kampus,
-                            value=row.get("KAMPUS", ""),
-                            key=f"kampus_{idx}",
-                            placeholder="Contoh: Universitas Airlangga",
-                            help="Nama kampus untuk nasabah mahasiswa"
-                        )
-                        if new_kampus != row.get("KAMPUS", ""):
-                            st.session_state.data_db[idx]["KAMPUS"] = new_kampus
                     
                     if new_nama and new_nik:
                         st.success("✅ Data lengkap tersimpan otomatis")
@@ -642,8 +559,7 @@ with button_placeholder:
                                 "NAMA GADIS IBU": "",
                                 "CIF NO": "",
                                 "NO HP": "",
-                                "EMAIL": "",
-                                "KAMPUS": ""
+                                "EMAIL": ""
                             })
                             st.session_state.processed_files.add(res["FILENAME"])
                         
@@ -670,8 +586,7 @@ if st.session_state.data_db:
             "NAMA GADIS IBU": row.get("NAMA GADIS IBU", ""),
             "CIF NO": row.get("CIF NO", ""),
             "NO HP": row.get("NO HP", ""),
-            "EMAIL": row.get("EMAIL", ""),
-            "KAMPUS": row.get("KAMPUS", "")
+            "EMAIL": row.get("EMAIL", "")
         })
     
     df_display = pd.DataFrame(df_preview)
@@ -688,7 +603,6 @@ if st.session_state.data_db:
             "CIF NO": st.column_config.TextColumn("CIF No", width="small"),
             "NO HP": st.column_config.TextColumn("No HP", width="medium"),
             "EMAIL": st.column_config.TextColumn("Email", width="large"),
-            "KAMPUS": st.column_config.TextColumn("Kampus", width="large"),
         }
     )
     
@@ -706,8 +620,7 @@ if st.session_state.data_db:
                 "NAMA GADIS IBU": row.get("NAMA GADIS IBU", ""),
                 "CIF NO": row.get("CIF NO", ""),
                 "NO HP": row.get("NO HP", ""),
-                "EMAIL": row.get("EMAIL", ""),
-                "KAMPUS": row.get("KAMPUS", "")
+                "EMAIL": row.get("EMAIL", "")
             })
         df_dl = pd.DataFrame(df_export)
         buffer = io.BytesIO()
@@ -740,7 +653,7 @@ if st.session_state.data_db:
 st.divider()
 st.markdown("""
 <div style="text-align: center; color: #0067B8; padding: 1rem;">
-    <strong>Bank Rakyat Indonesia (Persero) Tbk.</strong><br>
-    <small>KTP Digital Scanner v4.3 BRI Edition | Powered by EasyOCR Technology</small>
+    <strong>Bank Rakyat Indonesia KC Jemur Sari.</strong><br>
+    <small>KTP Digital Scanner BRI Jemur Sari Edition | Powered by EasyOCR Technology</small>
 </div>
 """, unsafe_allow_html=True)
