@@ -1,0 +1,431 @@
+import streamlit as st
+import pandas as pd
+import numpy as np
+import easyocr
+import cv2
+import re
+import io
+import concurrent.futures
+from PIL import Image
+
+# --- CONFIG & OCR ---
+st.set_page_config(page_title="KTP Scanner Pro v4.3", layout="wide")
+
+# Custom CSS untuk better UX
+st.markdown("""
+<style>
+    /* Highlight focused input */
+    .stTextInput input:focus {
+        border-color: #4CAF50 !important;
+        box-shadow: 0 0 8px rgba(76, 175, 80, 0.6) !important;
+    }
+    
+    /* Smooth scroll behavior */
+    html {
+        scroll-behavior: smooth;
+    }
+    
+    /* Card styling */
+    div[data-testid="column"] {
+        background-color: #f8f9fa;
+        padding: 1rem;
+        border-radius: 10px;
+        margin-bottom: 1rem;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+@st.cache_resource
+def load_ocr():
+    return easyocr.Reader(['id', 'en'], gpu=False)
+
+reader = load_ocr()
+
+# --- FUNGSI EKSTRAKSI ASLI TEGAR (PROTECTED) ---
+
+def clean_nik_advanced(text):
+    text = text.upper().replace(" ", "").replace(":", "").replace("-", "")
+    replacements = {
+        'O': '0', 'D': '0', 'Q': '0', 'U': '0', 'C': '0',
+        'L': '1', 'I': '1', 'T': '1', 'J': '1', '!': '1',
+        'Z': '2', 'E': '3', 'A': '4', 'S': '5', 
+        'G': '6', 'b': '6', '?': '7', 'B': '8', '&': '8'
+    }
+    for k, v in replacements.items():
+        text = text.replace(k, v)
+    return re.sub(r'\D', '', text)
+
+def fix_nama_typo(nama_raw):
+    if not nama_raw: return ""
+    fixes = {'SUGIHANTI': 'SUGIANTI', 'PCATII': 'PERTIWI', 'PCATI': 'PERTIWI', 'PCATWI': 'PERTIWI', 'MAAGI': 'MARGI', 'HANJTI': 'ANTI', 'ANJTI': 'ANTI'}
+    result = nama_raw
+    for wrong, right in fixes.items():
+        result = result.replace(wrong, right)
+    for w, r in {'1': 'I', '0': 'O', '5': 'S'}.items():
+        result = result.replace(w, r)
+    return result.strip()
+
+def extract_nik(text_list):
+    for i, text in enumerate(text_list):
+        if re.search(r'\bNIK\b', text, re.IGNORECASE):
+            for j in range(i, min(i + 5, len(text_list))):
+                nums = re.sub(r'[^0-9]', '', text_list[j])
+                if len(nums) == 16: return nums
+                elif len(nums) > 16: return nums[:16]
+    for text in text_list:
+        nums = re.sub(r'[^0-9]', '', text)
+        if len(nums) == 16: return nums
+    for text in text_list:
+        cleaned = clean_nik_advanced(text)
+        if len(cleaned) == 16: return cleaned
+    return ""
+
+def extract_nama(text_list):
+    for i, text in enumerate(text_list):
+        if re.search(r'\bnama\b|namà', text, re.IGNORECASE):
+            for j in range(i + 1, min(i + 3, len(text_list))):
+                candidate = text_list[j].strip()
+                cleaned = re.sub(r'[^A-Za-z\s]', '', candidate).upper().strip()
+                if len(cleaned) < 5: continue
+                skip_words = ['TEMPAT', 'LAHIR', 'JENIS', 'KELAMIN', 'ALAMAT', 'MOJOKERTO', 'PROVINSI', 'KABUPATEN', 'KOTA', 'JAWA', 'TIMUR', 'BARAT', 'SELATAN', 'UTARA']
+                if any(word in cleaned for word in skip_words): continue
+                return fix_nama_typo(cleaned)
+    blacklist = ["PROVINSI", "KABUPATEN", "KOTA", "NIK", "NAMA", "LAHIR", "DARAH", "ALAMAT", "RT/RW", "KEL/DESA", "KECAMATAN", "AGAMA", "KAWIN", "PEKERJAAN", "ISLAM", "KRISTEN", "WNI"]
+    longest_text = ""
+    for text in text_list:
+        clean_txt = re.sub(r'[^A-Z\s]', '', text.upper()).strip()
+        if any(x in clean_txt for x in blacklist): continue
+        if len(clean_txt) > len(longest_text) and len(clean_txt) > 8: longest_text = clean_txt
+    return fix_nama_typo(longest_text) if longest_text else ""
+
+# --- WORKER PROCESS ---
+def worker_process(file_item, thumbnail_size=400):
+    try:
+        f_bytes = file_item.getvalue()
+        nparr = np.frombuffer(f_bytes, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        h, w = img.shape[:2]
+        img_ocr = cv2.resize(img, (1500, int(h * (1500/w))), interpolation=cv2.INTER_CUBIC)
+        gray = cv2.cvtColor(img_ocr, cv2.COLOR_BGR2GRAY)
+        processed = cv2.GaussianBlur(gray, (5, 5), 0)
+        
+        results = reader.readtext(processed)
+        text_list = [r[1] for r in results]
+        
+        # Simpan gambar original sebagai bytes
+        preview_img = Image.open(io.BytesIO(f_bytes))
+        preview_img.thumbnail((thumbnail_size, thumbnail_size))
+        
+        # Convert to bytes
+        img_buffer = io.BytesIO()
+        preview_img.save(img_buffer, format='JPEG', quality=90)
+        img_buffer.seek(0)
+        
+        return {
+            "IMAGE_DATA": img_buffer.getvalue(),
+            "NAMA": extract_nama(text_list),
+            "NOMORIDENTITAS": extract_nik(text_list),
+            "FILENAME": file_item.name
+        }
+    except Exception as e:
+        st.error(f"Error processing {file_item.name}: {str(e)}")
+        return None
+
+# --- UI MAIN ---
+st.title("BRI KTP Scanner")
+st.caption("Card Layout - Auto Save + Excel Preview Table")
+
+# Sidebar settings
+st.sidebar.header("⚙️ Pengaturan")
+
+st.sidebar.success("""
+**⌨️ CARA CEPAT INPUT:**
+1. **TAB** = Pindah field berikutnya
+2. Isi data sambil lihat foto
+3. Data **auto-save** saat pindah field
+4. Scroll ke card berikutnya
+5. Ulangi!
+
+💡 **Tip:** Pakai Tab terus, jangan Enter!
+""")
+
+preview_width = st.sidebar.slider(
+    "📏 Lebar Preview KTP",
+    min_value=300,
+    max_value=700,
+    value=500,
+    step=50,
+    help="Atur lebar preview KTP di card"
+)
+
+cards_per_row = st.sidebar.radio(
+    "📐 Cards Per Baris",
+    options=[1, 2],
+    index=0,
+    help="Rekomendasi: 1 card (full width) untuk input lebih nyaman",
+    format_func=lambda x: f"{x} Card (Full Width)" if x == 1 else f"{x} Cards"
+)
+
+show_field_numbers = st.sidebar.checkbox(
+    "🔢 Tampilkan Nomor Urut Field",
+    value=True,
+    help="Tampilkan 1️⃣ 2️⃣ 3️⃣ di label field"
+)
+
+if 'data_db' not in st.session_state:
+    st.session_state.data_db = []
+if 'processed_files' not in st.session_state:
+    st.session_state.processed_files = set()
+
+uploaded_files = st.file_uploader("📤 Upload KTP (Bisa Lebih Dari Satu)", type=['jpg','png','jpeg'], accept_multiple_files=True)
+
+button_placeholder = st.container()
+status_placeholder = st.container()
+
+# Display data as cards - AUTO SAVE ON CHANGE
+if st.session_state.data_db:
+    st.divider()
+    
+    # Progress indicator
+    col_title, col_progress = st.columns([3, 1])
+    with col_title:
+        st.subheader(f"📋 Data KTP Terdeteksi")
+    with col_progress:
+        total = len(st.session_state.data_db)
+        filled = sum(1 for r in st.session_state.data_db if r.get("NAMA") and r.get("NOMORIDENTITAS"))
+        st.metric("Progress", f"{filled}/{total}")
+    
+    # Group cards into rows
+    for i in range(0, len(st.session_state.data_db), cards_per_row):
+        cols = st.columns(cards_per_row)
+        
+        for j in range(cards_per_row):
+            idx = i + j
+            if idx >= len(st.session_state.data_db):
+                break
+            
+            row = st.session_state.data_db[idx]
+            
+            with cols[j]:
+                # Card container
+                with st.container():
+                    # Header dengan nomor KTP
+                    col_h1, col_h2 = st.columns([3, 1])
+                    with col_h1:
+                        st.markdown(f"### 🆔 KTP #{idx + 1}")
+                    with col_h2:
+                        if st.button("🗑️", key=f"del_{idx}", help="Hapus KTP ini"):
+                            st.session_state.data_db.pop(idx)
+                            st.rerun()
+                    
+                    # Preview Image - BIG
+                    if row.get("IMAGE_DATA"):
+                        st.image(row["IMAGE_DATA"], width=preview_width, use_container_width=False)
+                    
+                    st.divider()
+                    
+                    # Form inputs - AUTO SAVE dengan on_change
+                    st.markdown("**📝 Data KTP**")
+                    
+                    # Field 1: Nama
+                    label_nama = "1️⃣ Nama Lengkap" if show_field_numbers else "Nama Lengkap"
+                    new_nama = st.text_input(
+                        label_nama,
+                        value=row["NAMA"],
+                        key=f"nama_{idx}",
+                        placeholder="Masukkan nama lengkap",
+                        help="Tab untuk pindah ke NIK"
+                    )
+                    if new_nama != row["NAMA"]:
+                        st.session_state.data_db[idx]["NAMA"] = new_nama
+                    
+                    # Field 2: NIK
+                    label_nik = "2️⃣ NIK (16 digit)" if show_field_numbers else "NIK (16 digit)"
+                    new_nik = st.text_input(
+                        label_nik,
+                        value=row["NOMORIDENTITAS"],
+                        key=f"nik_{idx}",
+                        placeholder="3516XXXXXXXXXXXX",
+                        max_chars=16,
+                        help="Tab untuk pindah ke Nama Ibu"
+                    )
+                    if new_nik != row["NOMORIDENTITAS"]:
+                        st.session_state.data_db[idx]["NOMORIDENTITAS"] = new_nik
+                    
+                    st.markdown("**ℹ️ Informasi Tambahan**")
+                    
+                    # Field 3: Nama Ibu
+                    label_ibu = "3️⃣ Nama Gadis Ibu" if show_field_numbers else "Nama Gadis Ibu"
+                    new_ibu = st.text_input(
+                        label_ibu,
+                        value=row.get("NAMA GADIS IBU", ""),
+                        key=f"ibu_{idx}",
+                        placeholder="Nama gadis ibu kandung",
+                        help="Tab untuk pindah ke CIF"
+                    )
+                    if new_ibu != row.get("NAMA GADIS IBU", ""):
+                        st.session_state.data_db[idx]["NAMA GADIS IBU"] = new_ibu
+                    
+                    # Field 4 & 5: CIF dan HP (side by side)
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        label_cif = "4️⃣ CIF No" if show_field_numbers else "CIF No"
+                        new_cif = st.text_input(
+                            label_cif,
+                            value=row.get("CIF NO", ""),
+                            key=f"cif_{idx}",
+                            placeholder="CIF",
+                            help="Tab untuk pindah ke No HP"
+                        )
+                        if new_cif != row.get("CIF NO", ""):
+                            st.session_state.data_db[idx]["CIF NO"] = new_cif
+                    
+                    with col2:
+                        label_hp = "5️⃣ No HP" if show_field_numbers else "No HP"
+                        new_hp = st.text_input(
+                            label_hp,
+                            value=row.get("NO HP", ""),
+                            key=f"hp_{idx}",
+                            placeholder="08XXXXXXXXXX",
+                            help="Tab untuk pindah ke Email"
+                        )
+                        if new_hp != row.get("NO HP", ""):
+                            st.session_state.data_db[idx]["NO HP"] = new_hp
+                    
+                    # Field 6: Email
+                    label_email = "6️⃣ Email" if show_field_numbers else "Email"
+                    new_email = st.text_input(
+                        label_email,
+                        value=row.get("EMAIL", ""),
+                        key=f"email_{idx}",
+                        placeholder="email@example.com",
+                        help="Field terakhir - Tab untuk ke tombol atau scroll ke KTP berikutnya"
+                    )
+                    if new_email != row.get("EMAIL", ""):
+                        st.session_state.data_db[idx]["EMAIL"] = new_email
+                    
+                    # Status indicator
+                    if new_nama and new_nik:
+                        st.success("✅ Data lengkap tersimpan otomatis")
+                    elif new_nama or new_nik:
+                        st.warning("⚠️ Data belum lengkap")
+                    
+                    st.markdown("---")
+
+with button_placeholder:
+    if uploaded_files:
+        new_files = [f for f in uploaded_files if f.name not in st.session_state.processed_files]
+        if new_files:
+            if st.button("🚀 MULAI SCANNING", type="primary", use_container_width=True):
+                with status_placeholder:
+                    bar = st.progress(0)
+                    txt = st.empty()
+                
+                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as exc:
+                    futures = {exc.submit(worker_process, f, preview_width): f for f in new_files}
+                    for i, future in enumerate(concurrent.futures.as_completed(futures)):
+                        res = future.result()
+                        if res:
+                            st.session_state.data_db.append({
+                                "IMAGE_DATA": res["IMAGE_DATA"],
+                                "NAMA": res["NAMA"],
+                                "NOMORIDENTITAS": res["NOMORIDENTITAS"],
+                                "NAMA GADIS IBU": "",
+                                "CIF NO": "",
+                                "NO HP": "",
+                                "EMAIL": ""
+                            })
+                            st.session_state.processed_files.add(res["FILENAME"])
+                        txt.info(f"⏳ Sedang memproses file baru: {i+1}/{len(new_files)}...")
+                        bar.progress((i + 1) / len(new_files))
+                
+                st.toast("✅ Scanning Selesai!", icon="✅")
+                txt.empty()
+                bar.empty()
+                st.rerun()
+
+# Download & Clear
+if st.session_state.data_db:
+    st.divider()
+    
+    # Preview Tabel Excel
+    st.subheader("📊 Preview Data Excel (Siap Download)")
+    st.caption("Tabel di bawah ini adalah preview data yang akan di-download (tanpa foto)")
+    
+    # Buat dataframe untuk preview
+    df_preview = []
+    for idx, row in enumerate(st.session_state.data_db):
+        df_preview.append({
+            "NO": idx + 1,
+            "NAMA": row["NAMA"],
+            "NOMORIDENTITAS": row["NOMORIDENTITAS"],
+            "NAMA GADIS IBU": row.get("NAMA GADIS IBU", ""),
+            "CIF NO": row.get("CIF NO", ""),
+            "NO HP": row.get("NO HP", ""),
+            "EMAIL": row.get("EMAIL", "")
+        })
+    
+    df_display = pd.DataFrame(df_preview)
+    
+    # Tampilkan sebagai dataframe (non-editable, pure preview)
+    st.dataframe(
+        df_display,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "NO": st.column_config.NumberColumn("No", width="small"),
+            "NAMA": st.column_config.TextColumn("Nama", width="large"),
+            "NOMORIDENTITAS": st.column_config.TextColumn("NIK", width="medium"),
+            "NAMA GADIS IBU": st.column_config.TextColumn("Nama Gadis Ibu", width="medium"),
+            "CIF NO": st.column_config.TextColumn("CIF No", width="small"),
+            "NO HP": st.column_config.TextColumn("No HP", width="medium"),
+            "EMAIL": st.column_config.TextColumn("Email", width="large"),
+        }
+    )
+    
+    st.divider()
+    
+    c1, c2, c3 = st.columns([2, 2, 1])
+    
+    with c1:
+        # Export Excel tanpa kolom IMAGE_DATA
+        df_export = []
+        for idx, row in enumerate(st.session_state.data_db):
+            df_export.append({
+                "NO": idx + 1,
+                "NAMA": row["NAMA"],
+                "NOMORIDENTITAS": row["NOMORIDENTITAS"],
+                "NAMA GADIS IBU": row.get("NAMA GADIS IBU", ""),
+                "CIF NO": row.get("CIF NO", ""),
+                "NO HP": row.get("NO HP", ""),
+                "EMAIL": row.get("EMAIL", "")
+            })
+        df_dl = pd.DataFrame(df_export)
+        buffer = io.BytesIO()
+        with pd.ExcelWriter(buffer, engine='xlsxwriter') as wr:
+            df_dl.to_excel(wr, index=False, sheet_name='Data KTP')
+        
+        st.download_button(
+            "📥 Download Excel",
+            buffer.getvalue(),
+            "Data_KTP.xlsx",
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True
+        )
+    
+    with c2:
+        if st.button("🗑️ Hapus Semua Data", type="secondary", use_container_width=True):
+            if st.session_state.get('confirm_delete', False):
+                st.session_state.data_db = []
+                st.session_state.processed_files = set()
+                st.session_state.confirm_delete = False
+                st.rerun()
+            else:
+                st.session_state.confirm_delete = True
+                st.warning("⚠️ Klik sekali lagi untuk konfirmasi hapus semua data!")
+    
+    with c3:
+        st.metric("Total KTP", len(st.session_state.data_db))
+
+st.divider()
+st.caption("Dev By UPN VETERAN JATIM Internship Group feb 2026")
