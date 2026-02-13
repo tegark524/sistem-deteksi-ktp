@@ -270,20 +270,60 @@ def worker_process(file_item, thumbnail_size, reader):
 
 # --- UI MAIN ---
 # Header dengan branding BRI
-st.markdown("""
-<div class="main-header">
-    <h1 style="color: white; margin: 0; font-size: 2.5rem;">
-        🏦 BRI KTP Digital Scanner
-    </h1>
-    <p style="color: #E8F4FD; margin: 0.5rem 0 0 0; font-size: 1.1rem;">
-        Sistem Digitalisasi Data Nasabah - Bank Rakyat Indonesia
-    </p>
-</div>
-""", unsafe_allow_html=True)
+# Coba load logo kalau ada
+try:
+    from pathlib import Path
+    logo_path = Path("LOGO.png")
+    if logo_path.exists():
+        col_logo, col_title = st.columns([1, 5])
+        with col_logo:
+            st.image("LOGO.png", width=120)
+        with col_title:
+            st.markdown("""
+            <div style="padding-top: 10px;">
+                <h1 style="color: #0067B8; margin: 0; font-size: 2.5rem;">
+                    BRI KTP Digital Scanner
+                </h1>
+                <p style="color: #666666; margin: 0.5rem 0 0 0; font-size: 1.1rem;">
+                    Sistem Digitalisasi Data Nasabah - Bank Rakyat Indonesia
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+    else:
+        st.markdown("""
+        <div class="main-header">
+            <h1 style="color: white; margin: 0; font-size: 2.5rem;">
+                🏦 BRI KTP Digital Scanner
+            </h1>
+            <p style="color: #E8F4FD; margin: 0.5rem 0 0 0; font-size: 1.1rem;">
+                Sistem Digitalisasi Data Nasabah - Bank Rakyat Indonesia
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+except:
+    st.markdown("""
+    <div class="main-header">
+        <h1 style="color: white; margin: 0; font-size: 2.5rem;">
+            🏦 BRI KTP Digital Scanner
+        </h1>
+        <p style="color: #E8F4FD; margin: 0.5rem 0 0 0; font-size: 1.1rem;">
+            Sistem Digitalisasi Data Nasabah - Bank Rakyat Indonesia
+        </p>
+    </div>
+    """, unsafe_allow_html=True)
 
 st.caption("✨ Powered by EasyOCR Technology | v4.3 BRI Edition")
 
 # Sidebar settings
+# Logo di sidebar
+try:
+    from pathlib import Path
+    if Path("LOGO.png").exists():
+        st.sidebar.image("LOGO.png", width=200)
+        st.sidebar.markdown("---")
+except:
+    pass
+
 st.sidebar.markdown("### ⚙️ Pengaturan Sistem")
 st.sidebar.markdown("---")
 
