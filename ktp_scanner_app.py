@@ -26,6 +26,32 @@ st.markdown("""
         --bri-white: #FFFFFF;
     }
     
+    /* Force light mode untuk content area */
+    .main .block-container {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    /* Fix text color di dark mode */
+    .main .block-container * {
+        color: #000000 !important;
+    }
+    
+    /* Fix input text di dark mode */
+    .stTextInput input {
+        background-color: #FFFFFF !important;
+        color: #000000 !important;
+    }
+    
+    /* Fix markdown text */
+    .main .block-container h1,
+    .main .block-container h2,
+    .main .block-container h3,
+    .main .block-container p,
+    .main .block-container label {
+        color: #000000 !important;
+    }
+    
     /* Header dengan gradient BRI */
     .main-header {
         background: linear-gradient(135deg, #0067B8 0%, #004A8F 100%);
@@ -33,6 +59,11 @@ st.markdown("""
         border-radius: 10px;
         margin-bottom: 2rem;
         box-shadow: 0 4px 6px rgba(0, 103, 184, 0.2);
+    }
+    
+    .main-header h1,
+    .main-header p {
+        color: #FFFFFF !important;
     }
     
     /* Text input focus dengan warna BRI */
@@ -45,6 +76,7 @@ st.markdown("""
     .stButton > button[kind="primary"] {
         background-color: #0067B8 !important;
         border-color: #0067B8 !important;
+        color: #FFFFFF !important;
     }
     
     .stButton > button[kind="primary"]:hover {
@@ -57,15 +89,14 @@ st.markdown("""
         background-color: #0067B8;
     }
     
-    /* Sidebar dengan aksen BRI */
+    /* Sidebar dengan aksen BRI - keep original dark/light mode */
     [data-testid="stSidebar"] {
-        background-color: #F8FBFF;
         border-right: 3px solid #0067B8;
     }
     
     /* Card container dengan border BRI */
     div[data-testid="column"] {
-        background-color: #FFFFFF;
+        background-color: #FFFFFF !important;
         padding: 1.5rem;
         border-radius: 12px;
         border: 2px solid #E8F4FD;
@@ -75,14 +106,36 @@ st.markdown("""
     
     /* Success message dengan warna BRI */
     .element-container .stSuccess {
-        background-color: #E8F4FD;
+        background-color: #E8F4FD !important;
         border-left: 4px solid #0067B8;
+        color: #000000 !important;
+    }
+    
+    /* Warning message fix */
+    .element-container .stWarning {
+        background-color: #FFF3CD !important;
+        color: #000000 !important;
+    }
+    
+    /* Info message fix */
+    .element-container .stInfo {
+        background-color: #E8F4FD !important;
+        color: #000000 !important;
     }
     
     /* Metrics dengan style BRI */
     [data-testid="stMetricValue"] {
-        color: #0067B8;
+        color: #0067B8 !important;
         font-weight: 700;
+    }
+    
+    [data-testid="stMetricLabel"] {
+        color: #000000 !important;
+    }
+    
+    /* Dataframe fix untuk dark mode */
+    .stDataFrame {
+        background-color: #FFFFFF !important;
     }
     
     /* Smooth scroll */
@@ -92,7 +145,13 @@ st.markdown("""
     
     /* Divider dengan warna BRI */
     hr {
-        border-color: #E8F4FD;
+        border-color: #E8F4FD !important;
+    }
+    
+    /* Caption text fix */
+    .main .block-container small,
+    .main .block-container .caption {
+        color: #666666 !important;
     }
 </style>
 """, unsafe_allow_html=True)
