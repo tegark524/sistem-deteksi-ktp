@@ -305,7 +305,7 @@ try:
                     BRI KTP Digital Scanner
                 </h1>
                 <p style="color: #666666; margin: 0.5rem 0 0 0; font-size: 1.1rem;">
-                    Sistem Digitalisasi Data Nasabah - Bank Rakyat Indonesia
+                    Sistem Digitalisasi Data Nasabah - Oleh Tim Magang Dev UPN "Veteran Jatim" Feb 26'
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -653,7 +653,7 @@ if st.session_state.data_db:
 st.divider()
 st.markdown("""
 <div style="text-align: center; color: #0067B8; padding: 1rem;">
-    <strong>Bank Rakyat Indonesia (Persero) Tbk.</strong><br>
-    <small>KTP Digital Scanner v4.3 BRI Edition | Powered by EasyOCR Technology</small>
+    <strong>Bank Rakyat Indonesia KC Jemur Sari.</strong><br>
+    <small>KTP Digital Scanner BRI Jemur Sari Edition | Powered by EasyOCR Technology</small>
 </div>
 """, unsafe_allow_html=True)
