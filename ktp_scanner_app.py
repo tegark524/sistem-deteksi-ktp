@@ -6,12 +6,11 @@ import re
 import io
 import concurrent.futures
 from PIL import Image
-import pytesseract
 
 # --- CONFIG ---
-st.set_page_config(page_title="KTP Scanner Pro v4.3 (Cloud)", layout="wide")
+st.set_page_config(page_title="KTP Scanner Pro v4.3", layout="wide")
 
-# Custom CSS untuk better UX
+# Custom CSS
 st.markdown("""
 <style>
     .stTextInput input:focus {
@@ -29,6 +28,17 @@ st.markdown("""
     }
 </style>
 """, unsafe_allow_html=True)
+
+# --- LAZY LOAD OCR (untuk hemat memory) ---
+@st.cache_resource(show_spinner="🔄 Loading OCR engine... (first time only, ~30 sec)")
+def load_ocr():
+    try:
+        import easyocr
+        return easyocr.Reader(['id', 'en'], gpu=False, verbose=False)
+    except Exception as e:
+        st.error(f"❌ Error loading OCR: {str(e)}")
+        st.info("💡 Try refreshing the page or contact support")
+        return None
 
 # --- FUNGSI EKSTRAKSI ---
 
@@ -87,33 +97,38 @@ def extract_nama(text_list):
         if len(clean_txt) > len(longest_text) and len(clean_txt) > 8: longest_text = clean_txt
     return fix_nama_typo(longest_text) if longest_text else ""
 
-# --- WORKER PROCESS dengan Tesseract ---
-def worker_process(file_item, thumbnail_size=400):
+# --- WORKER PROCESS ---
+def worker_process(file_item, thumbnail_size, reader):
     try:
+        if reader is None:
+            return None
+            
         f_bytes = file_item.getvalue()
         nparr = np.frombuffer(f_bytes, np.uint8)
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        
+        if img is None:
+            st.error(f"❌ Cannot decode image: {file_item.name}")
+            return None
+            
         h, w = img.shape[:2]
         
-        # Resize untuk OCR
-        img_ocr = cv2.resize(img, (1500, int(h * (1500/w))), interpolation=cv2.INTER_CUBIC)
+        # Resize untuk OCR - OPTIMIZED SIZE
+        target_width = 1200  # Reduced from 1500 untuk save memory
+        img_ocr = cv2.resize(img, (target_width, int(h * (target_width/w))), interpolation=cv2.INTER_CUBIC)
         gray = cv2.cvtColor(img_ocr, cv2.COLOR_BGR2GRAY)
+        processed = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # Preprocessing untuk Tesseract
-        gray = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[1]
-        gray = cv2.medianBlur(gray, 3)
+        # OCR
+        results = reader.readtext(processed)
+        text_list = [r[1] for r in results]
         
-        # OCR dengan Tesseract
-        custom_config = r'--oem 3 --psm 6'
-        text = pytesseract.image_to_string(gray, lang='ind+eng', config=custom_config)
-        text_list = [line.strip() for line in text.split('\n') if line.strip()]
-        
-        # Simpan gambar preview
+        # Simpan preview
         preview_img = Image.open(io.BytesIO(f_bytes))
         preview_img.thumbnail((thumbnail_size, thumbnail_size))
         
         img_buffer = io.BytesIO()
-        preview_img.save(img_buffer, format='JPEG', quality=90)
+        preview_img.save(img_buffer, format='JPEG', quality=85)  # Reduced quality untuk save memory
         img_buffer.seek(0)
         
         return {
@@ -123,12 +138,12 @@ def worker_process(file_item, thumbnail_size=400):
             "FILENAME": file_item.name
         }
     except Exception as e:
-        st.error(f"Error processing {file_item.name}: {str(e)}")
+        st.error(f"❌ Error processing {file_item.name}: {str(e)}")
         return None
 
 # --- UI MAIN ---
-st.title("🎯 KTP Scanner Pro - v4.3 Cloud")
-st.caption("Card Layout - Auto Save + Excel Preview (Optimized for Streamlit Cloud)")
+st.title("🎯 KTP Scanner Pro - v4.3")
+st.caption("Card Layout - Auto Save + Excel Preview")
 
 # Sidebar settings
 st.sidebar.header("⚙️ Pengaturan")
@@ -142,6 +157,13 @@ st.sidebar.success("""
 5. Ulangi!
 
 💡 **Tip:** Pakai Tab terus, jangan Enter!
+""")
+
+st.sidebar.warning("""
+**⚠️ Cloud Limits:**
+- Max 3-5 KTP per batch
+- Gunakan foto <2MB
+- Jika crash, refresh page
 """)
 
 preview_width = st.sidebar.slider(
@@ -172,7 +194,11 @@ if 'data_db' not in st.session_state:
 if 'processed_files' not in st.session_state:
     st.session_state.processed_files = set()
 
-uploaded_files = st.file_uploader("📤 Upload KTP (Batch)", type=['jpg','png','jpeg'], accept_multiple_files=True)
+uploaded_files = st.file_uploader(
+    "📤 Upload KTP (Max 5 foto untuk Streamlit Cloud)", 
+    type=['jpg','png','jpeg'], 
+    accept_multiple_files=True
+)
 
 button_placeholder = st.container()
 status_placeholder = st.container()
@@ -297,16 +323,30 @@ if st.session_state.data_db:
 with button_placeholder:
     if uploaded_files:
         new_files = [f for f in uploaded_files if f.name not in st.session_state.processed_files]
+        
+        # LIMIT untuk cloud
+        if len(new_files) > 5:
+            st.warning("⚠️ Streamlit Cloud limit: Max 5 KTP per batch. Upload ulang dalam batch kecil.")
+            new_files = new_files[:5]
+        
         if new_files:
             if st.button("🚀 MULAI SCANNING", type="primary", use_container_width=True):
-                with status_placeholder:
-                    bar = st.progress(0)
-                    txt = st.empty()
+                # Load OCR
+                reader = load_ocr()
                 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=2) as exc:
-                    futures = {exc.submit(worker_process, f, preview_width): f for f in new_files}
-                    for i, future in enumerate(concurrent.futures.as_completed(futures)):
-                        res = future.result()
+                if reader is None:
+                    st.error("❌ OCR engine failed to load. Please refresh the page.")
+                else:
+                    with status_placeholder:
+                        bar = st.progress(0)
+                        txt = st.empty()
+                    
+                    # Process satu-satu untuk avoid memory issues
+                    for i, file_item in enumerate(new_files):
+                        txt.info(f"⏳ Memproses: {file_item.name} ({i+1}/{len(new_files)})...")
+                        
+                        res = worker_process(file_item, preview_width, reader)
+                        
                         if res:
                             st.session_state.data_db.append({
                                 "IMAGE_DATA": res["IMAGE_DATA"],
@@ -318,13 +358,13 @@ with button_placeholder:
                                 "EMAIL": ""
                             })
                             st.session_state.processed_files.add(res["FILENAME"])
-                        txt.info(f"⏳ Sedang memproses: {i+1}/{len(new_files)}...")
+                        
                         bar.progress((i + 1) / len(new_files))
-                
-                st.toast("✅ Scanning Selesai!", icon="✅")
-                txt.empty()
-                bar.empty()
-                st.rerun()
+                    
+                    st.toast("✅ Scanning Selesai!", icon="✅")
+                    txt.empty()
+                    bar.empty()
+                    st.rerun()
 
 # Preview & Download
 if st.session_state.data_db:
@@ -406,4 +446,4 @@ if st.session_state.data_db:
         st.metric("Total KTP", len(st.session_state.data_db))
 
 st.divider()
-st.caption("v4.3 Cloud - Optimized with Tesseract OCR ⚡")
+st.caption("v4.3 - EasyOCR Optimized for Cloud ⚡")
