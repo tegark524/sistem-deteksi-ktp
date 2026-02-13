@@ -8,12 +8,32 @@ import concurrent.futures
 from PIL import Image
 
 # --- CONFIG ---
-st.set_page_config(
-    page_title="BRI KTP Digital Scanner", 
-    page_icon="🏦",
-    layout="wide",
-    initial_sidebar_state="expanded"
-)
+# Load logo untuk favicon
+try:
+    from pathlib import Path
+    from PIL import Image
+    if Path("LOGO.png").exists():
+        favicon = Image.open("LOGO.png")
+        st.set_page_config(
+            page_title="BRI KTP Digital Scanner", 
+            page_icon=favicon,
+            layout="wide",
+            initial_sidebar_state="expanded"
+        )
+    else:
+        st.set_page_config(
+            page_title="BRI KTP Digital Scanner", 
+            page_icon="🏦",
+            layout="wide",
+            initial_sidebar_state="expanded"
+        )
+except:
+    st.set_page_config(
+        page_title="BRI KTP Digital Scanner", 
+        page_icon="🏦",
+        layout="wide",
+        initial_sidebar_state="expanded"
+    )
 
 # Custom CSS dengan warna BRI
 st.markdown("""
