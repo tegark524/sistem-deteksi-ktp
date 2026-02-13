@@ -332,7 +332,7 @@ except:
     </div>
     """, unsafe_allow_html=True)
 
-st.caption("✨ Powered by EasyOCR Technology | v4.3 BRI Edition")
+st.caption("✨ Powered by EasyOCR Technology")
 
 # Sidebar settings
 # Logo di sidebar
