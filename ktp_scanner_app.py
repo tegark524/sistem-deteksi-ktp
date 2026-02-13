@@ -37,7 +37,8 @@ st.markdown("""
 
 @st.cache_resource
 def load_ocr():
-    return easyocr.Reader(['id', 'en'], gpu=False)
+    # Gunakan hanya 'id' (Indonesia) saja untuk meringankan beban RAM
+    return easyocr.Reader(['id'], gpu=False, download_enabled=True)
 
 reader = load_ocr()
 
