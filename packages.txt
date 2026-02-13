@@ -1,2 +1,10 @@
-libgl1-mesa-glx
+libgl1
 libglib2.0-0
+```
+
+### 📝 Struktur File yang Dibutuhkan:
+```
+your-repo/
+├── ktp_scanner_v43.py      # Script utama
+├── requirements.txt        # Python packages
+└── packages.txt           # System packages (optional)
