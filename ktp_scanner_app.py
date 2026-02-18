@@ -387,37 +387,145 @@ def fix_nama_typo(nama_raw):
     return result.strip()
 
 def extract_nik(text_list):
+    """Extract NIK dengan validation ketat"""
+    
+    # STRATEGI 1: Cari setelah label "NIK"
     for i, text in enumerate(text_list):
         if re.search(r'\bNIK\b', text, re.IGNORECASE):
-            for j in range(i, min(i + 5, len(text_list))):
+            # Cek 5 baris berikutnya
+            for j in range(i, min(i + 6, len(text_list))):
+                # Extract semua angka
                 nums = re.sub(r'[^0-9]', '', text_list[j])
-                if len(nums) == 16: return nums
-                elif len(nums) > 16: return nums[:16]
+                
+                # NIK harus EXACTLY 16 digit
+                if len(nums) == 16:
+                    return nums
+                
+                # Jika lebih dari 16, ambil 16 digit pertama
+                elif len(nums) > 16:
+                    # Validasi: 16 digit pertama harus valid (dimulai 31-35 untuk Jatim)
+                    first_16 = nums[:16]
+                    if first_16[:2] in ['31', '32', '33', '34', '35']:  # Kode provinsi Jatim
+                        return first_16
+    
+    # STRATEGI 2: Cari sequence 16 digit di semua text
     for text in text_list:
         nums = re.sub(r'[^0-9]', '', text)
-        if len(nums) == 16: return nums
+        
+        # Exactly 16 digit
+        if len(nums) == 16:
+            # Validasi format NIK
+            if nums[:2] in ['31', '32', '33', '34', '35', '36']:  # Jawa
+                return nums
+        
+        # Jika ada lebih dari 16, cari pattern 16 digit
+        if len(nums) > 16:
+            # Sliding window untuk cari 16 digit yang valid
+            for start in range(len(nums) - 15):
+                candidate = nums[start:start+16]
+                if candidate[:2] in ['31', '32', '33', '34', '35', '36']:
+                    return candidate
+    
+    # STRATEGI 3: Clean & reconstruct dari text yang mungkin typo
     for text in text_list:
         cleaned = clean_nik_advanced(text)
-        if len(cleaned) == 16: return cleaned
+        if len(cleaned) == 16:
+            # Validasi prefix
+            if cleaned[:2] in ['31', '32', '33', '34', '35', '36']:
+                return cleaned
+        elif len(cleaned) > 16:
+            # Ambil 16 pertama yang valid
+            first_16 = cleaned[:16]
+            if first_16[:2] in ['31', '32', '33', '34', '35', '36']:
+                return first_16
+    
     return ""
 
 def extract_nama(text_list):
+    """Extract nama dengan filtering ketat untuk avoid junk"""
+    
+    # Blacklist kata yang BUKAN nama
+    blacklist = [
+        "PROVINSI", "KABUPATEN", "KOTA", "NIK", "NAMA", "LAHIR", "DARAH", 
+        "ALAMAT", "RT/RW", "KEL/DESA", "KECAMATAN", "AGAMA", "KAWIN", 
+        "PEKERJAAN", "ISLAM", "KRISTEN", "WNI", "BELUM", "STATUS",
+        "PERKAWINAN", "PERKAWNAN", "BERLAKU", "HINGGA", "SEUMUR", "HIDUP",
+        "TANGGAL", "TEMPAT", "JENIS", "KELAMIN", "GOLONGAN", "GOLAN",
+        "KEWARGANEGARAAN", "WARGA", "NEGARA", "REPUBLIK", "INDONESIA",
+        "SIDOARJO", "SURABAYA", "MOJOKERTO", "JAWA", "TIMUR", "BARAT",
+        "SELATAN", "UTARA", "TENGAH"
+    ]
+    
+    # STRATEGI 1: Cari setelah label "Nama" atau "Namà"
     for i, text in enumerate(text_list):
         if re.search(r'\bnama\b|namà', text, re.IGNORECASE):
+            # Cek 2 baris berikutnya
             for j in range(i + 1, min(i + 3, len(text_list))):
                 candidate = text_list[j].strip()
+                
+                # Clean: Hapus angka dan simbol
                 cleaned = re.sub(r'[^A-Za-z\s]', '', candidate).upper().strip()
-                if len(cleaned) < 5: continue
-                skip_words = ['TEMPAT', 'LAHIR', 'JENIS', 'KELAMIN', 'ALAMAT', 'MOJOKERTO', 'PROVINSI', 'KABUPATEN', 'KOTA', 'JAWA', 'TIMUR', 'BARAT', 'SELATAN', 'UTARA']
-                if any(word in cleaned for word in skip_words): continue
+                
+                # Filter: Minimal 5 karakter
+                if len(cleaned) < 5:
+                    continue
+                
+                # Filter: Max 50 karakter (nama terlalu panjang = junk)
+                if len(cleaned) > 50:
+                    continue
+                
+                # Filter: Harus ada spasi (nama lengkap minimal 2 kata)
+                if ' ' not in cleaned:
+                    continue
+                
+                # Filter: Skip jika ada kata blacklist
+                if any(word in cleaned for word in blacklist):
+                    continue
+                
+                # Filter: Skip jika ada angka banyak di text asli
+                digit_count = sum(c.isdigit() for c in candidate)
+                if digit_count > 3:  # Max 3 angka (misal: nama seperti "AHMAD 3")
+                    continue
+                
                 return fix_nama_typo(cleaned)
-    blacklist = ["PROVINSI", "KABUPATEN", "KOTA", "NIK", "NAMA", "LAHIR", "DARAH", "ALAMAT", "RT/RW", "KEL/DESA", "KECAMATAN", "AGAMA", "KAWIN", "PEKERJAAN", "ISLAM", "KRISTEN", "WNI"]
-    longest_text = ""
+    
+    # STRATEGI 2: Cari text terpanjang yang valid
+    valid_candidates = []
+    
     for text in text_list:
-        clean_txt = re.sub(r'[^A-Z\s]', '', text.upper()).strip()
-        if any(x in clean_txt for x in blacklist): continue
-        if len(clean_txt) > len(longest_text) and len(clean_txt) > 8: longest_text = clean_txt
-    return fix_nama_typo(longest_text) if longest_text else ""
+        # Clean
+        cleaned = re.sub(r'[^A-Z\s]', '', text.upper()).strip()
+        
+        # Filter basic
+        if len(cleaned) < 10 or len(cleaned) > 50:
+            continue
+        
+        # Harus ada minimal 2 kata
+        words = cleaned.split()
+        if len(words) < 2:
+            continue
+        
+        # Skip jika ada blacklist
+        if any(word in cleaned for word in blacklist):
+            continue
+        
+        # Skip jika kata terlalu panjang (> 15 karakter per kata = aneh)
+        if any(len(word) > 15 for word in words):
+            continue
+        
+        # Hitung angka di text asli
+        digit_count = sum(c.isdigit() for c in text)
+        if digit_count > 3:
+            continue
+        
+        valid_candidates.append(cleaned)
+    
+    # Ambil yang terpanjang dari candidates
+    if valid_candidates:
+        longest = max(valid_candidates, key=len)
+        return fix_nama_typo(longest)
+    
+    return ""
 
 # --- WORKER PROCESS ---
 def worker_process(file_item, thumbnail_size, reader):
@@ -457,7 +565,30 @@ def worker_process(file_item, thumbnail_size, reader):
         
         # STEP 5: OCR
         results = reader.readtext(processed)
-        text_list = [r[1] for r in results]
+        
+        # Post-process OCR results: Clean & split junk strings
+        text_list = []
+        for r in results:
+            raw_text = r[1].strip()
+            
+            # Skip jika terlalu pendek
+            if len(raw_text) < 2:
+                continue
+            
+            # Skip jika pure numbers yang terlalu panjang (> 20 digit = junk)
+            if raw_text.isdigit() and len(raw_text) > 20:
+                continue
+            
+            # Jika ada campuran nama+angka yang jadi satu string panjang
+            # Coba split by pattern
+            if len(raw_text) > 40 and any(c.isdigit() for c in raw_text) and any(c.isalpha() for c in raw_text):
+                # Split by transition digit-letter atau letter-digit
+                parts = re.split(r'(?<=\d)(?=[A-Z])|(?<=[A-Z])(?=\d)', raw_text)
+                for part in parts:
+                    if len(part) > 3:  # Skip parts terlalu pendek
+                        text_list.append(part.strip())
+            else:
+                text_list.append(raw_text)
         
         # STEP 6: Simpan preview (gunakan image yang sudah di-rotate)
         preview_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
