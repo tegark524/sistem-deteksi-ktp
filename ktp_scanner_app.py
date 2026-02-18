@@ -482,6 +482,22 @@ show_field_numbers = st.sidebar.checkbox(
     help="Tampilkan penanda urutan di setiap kolom input"
 )
 
+# ===== INISIALISASI SESSION STATE (HARUS DI SINI!) =====
+if 'data_db' not in st.session_state:
+    st.session_state.data_db = []
+if 'processed_files' not in st.session_state:
+    st.session_state.processed_files = set()
+if 'show_kampus_field' not in st.session_state:
+    st.session_state.show_kampus_field = False
+
+# Database pembelajaran dari koreksi user - LOAD DARI FILE (PERMANEN)
+if 'learned_fixes' not in st.session_state:
+    st.session_state.learned_fixes = load_learned_fixes()
+    
+# Simpan nama asli hasil OCR untuk tracking
+if 'original_ocr_results' not in st.session_state:
+    st.session_state.original_ocr_results = {}
+
 # Panel learned fixes
 st.sidebar.markdown("---")
 st.sidebar.markdown("### 🧠 Pembelajaran Sistem")
@@ -495,6 +511,7 @@ if st.session_state.learned_fixes:
         
         if st.button("🗑️ Reset Pembelajaran", key="reset_learning"):
             st.session_state.learned_fixes = {}
+            save_learned_fixes({})  # Hapus file juga
             st.rerun()
 else:
     st.sidebar.info("Belum ada pembelajaran. Sistem akan belajar saat Anda mengoreksi nama.")
@@ -508,22 +525,6 @@ show_kampus_field = st.sidebar.checkbox(
     help="Aktifkan untuk nasabah mahasiswa/pelajar"
 )
 st.session_state.show_kampus_field = show_kampus_field
-
-if 'data_db' not in st.session_state:
-    st.session_state.data_db = []
-if 'processed_files' not in st.session_state:
-    st.session_state.processed_files = set()
-
-# Database pembelajaran dari koreksi user - LOAD DARI FILE (PERMANEN)
-if 'learned_fixes' not in st.session_state:
-    st.session_state.learned_fixes = load_learned_fixes()
-    
-# Simpan nama asli hasil OCR untuk tracking
-if 'original_ocr_results' not in st.session_state:
-    st.session_state.original_ocr_results = {}
-    
-if 'show_kampus_field' not in st.session_state:
-    st.session_state.show_kampus_field = False
 
 uploaded_files = st.file_uploader(
     "📤 Upload Foto KTP Nasabah (Maksimal 5 foto)", 
