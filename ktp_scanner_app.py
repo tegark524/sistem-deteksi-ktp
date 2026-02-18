@@ -194,26 +194,56 @@ from pathlib import Path
 LEARNED_FIXES_FILE = Path("learned_fixes.json")
 
 def load_learned_fixes():
-    """Load learned fixes dari file JSON"""
+    """Load learned fixes dari Streamlit secrets (priority) atau file JSON (fallback)"""
     try:
+        # Priority 1: Coba load dari Streamlit Secrets (PERSISTENT DI CLOUD)
+        if hasattr(st, 'secrets') and 'learned_fixes' in st.secrets:
+            fixes = dict(st.secrets['learned_fixes'])
+            st.sidebar.caption("📡 Database loaded from Secrets (Cloud)")
+            return fixes
+    except Exception as e:
+        pass
+    
+    try:
+        # Priority 2: Load dari file JSON (untuk local development)
         if LEARNED_FIXES_FILE.exists():
             with open(LEARNED_FIXES_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
+                st.sidebar.caption("📁 Database loaded from file (Local)")
                 return data
-        return {}
     except Exception as e:
-        st.warning(f"⚠️ Gagal load database pembelajaran: {str(e)}")
-        return {}
+        pass
+    
+    return {}
 
 def save_learned_fixes(fixes_dict):
-    """Save learned fixes ke file JSON"""
+    """
+    Save learned fixes:
+    - Local: Save to JSON file
+    - Cloud: Show TOML format untuk manual paste ke Secrets
+    """
+    # Save to local JSON file (untuk development)
     try:
         with open(LEARNED_FIXES_FILE, 'w', encoding='utf-8') as f:
             json.dump(fixes_dict, f, ensure_ascii=False, indent=2)
-        return True
     except Exception as e:
-        st.error(f"❌ Gagal save database pembelajaran: {str(e)}")
-        return False
+        pass
+    
+    # Generate TOML format untuk Streamlit Secrets (Cloud)
+    if fixes_dict:
+        return {
+            'success': True,
+            'toml_format': generate_toml_format(fixes_dict)
+        }
+    return {'success': True, 'toml_format': None}
+
+def generate_toml_format(fixes_dict):
+    """Generate TOML format untuk Streamlit Secrets"""
+    toml_lines = ["[learned_fixes]"]
+    for wrong, right in sorted(fixes_dict.items()):
+        # Escape quotes in TOML
+        toml_lines.append(f'"{wrong}" = "{right}"')
+    return "\n".join(toml_lines)
 
 # --- FUNGSI EKSTRAKSI ---
 
@@ -503,18 +533,39 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("### 🧠 Pembelajaran Sistem")
 
 if st.session_state.learned_fixes:
-    st.sidebar.success(f"📚 {len(st.session_state.learned_fixes)} koreksi nama tersimpan")
+    total = len(st.session_state.learned_fixes)
+    st.sidebar.success(f"📚 {total} koreksi tersimpan")
     
-    with st.sidebar.expander("Lihat Database Koreksi"):
-        for wrong, right in st.session_state.learned_fixes.items():
-            st.write(f"❌ `{wrong}` → ✅ `{right}`")
+    with st.sidebar.expander(f"📖 Database Koreksi ({total})"):
+        for idx, (wrong, right) in enumerate(sorted(st.session_state.learned_fixes.items()), 1):
+            st.write(f"{idx}. `{wrong}` → `{right}`")
+        
+        st.markdown("---")
+        st.markdown("**💾 Export untuk Cloud Permanent:**")
+        
+        # Generate TOML untuk Streamlit Secrets
+        toml_data = generate_toml_format(st.session_state.learned_fixes)
+        st.code(toml_data, language="toml")
+        
+        st.info("""
+        **📋 Cara Simpan Permanent di Cloud:**
+        1. Copy kode TOML di atas
+        2. Buka App → Settings → Secrets
+        3. Paste di bagian paling bawah
+        4. Save → Redeploy otomatis
+        """, icon="💡")
         
         if st.button("🗑️ Reset Pembelajaran", key="reset_learning"):
-            st.session_state.learned_fixes = {}
-            save_learned_fixes({})  # Hapus file juga
-            st.rerun()
+            if st.session_state.get('confirm_reset', False):
+                st.session_state.learned_fixes = {}
+                save_learned_fixes({})
+                st.session_state.confirm_reset = False
+                st.rerun()
+            else:
+                st.session_state.confirm_reset = True
+                st.warning("⚠️ Klik lagi untuk konfirmasi reset!")
 else:
-    st.sidebar.info("Belum ada pembelajaran. Sistem akan belajar saat Anda mengoreksi nama.")
+    st.sidebar.info("💡 Belum ada pembelajaran.\n\nSistem akan belajar saat admin mengoreksi nama hasil OCR.", icon="🎓")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📚 Opsi Tambahan**")
