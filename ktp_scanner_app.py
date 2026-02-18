@@ -6,12 +6,14 @@ import re
 import io
 import concurrent.futures
 from PIL import Image
+import requests
+import json
+from datetime import datetime
 
 # --- CONFIG ---
 # Load logo untuk favicon
 try:
     from pathlib import Path
-    from PIL import Image
     if Path("LOGO.png").exists():
         favicon = Image.open("LOGO.png")
         st.set_page_config(
@@ -109,7 +111,7 @@ st.markdown("""
         background-color: #0067B8;
     }
     
-    /* Sidebar dengan aksen BRI - keep original dark/light mode */
+    /* Sidebar dengan aksen BRI */
     [data-testid="stSidebar"] {
         border-right: 3px solid #0067B8;
     }
@@ -176,7 +178,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- LAZY LOAD OCR (untuk hemat memory) ---
+# --- LAZY LOAD OCR ---
 @st.cache_resource(show_spinner="🔄 Loading OCR engine... (first time only, ~30 sec)")
 def load_ocr():
     try:
@@ -187,83 +189,57 @@ def load_ocr():
         st.info("💡 Try refreshing the page or contact support")
         return None
 
-# --- FUNGSI PEMBELAJARAN (LOAD & SAVE) ---
-import json
-from pathlib import Path
-
-LEARNED_FIXES_FILE = Path("learned_fixes.json")
-
-def load_learned_fixes():
-    """Load learned fixes dari Streamlit secrets (priority) atau file JSON (fallback)"""
-    # HARDCODED LEARNED FIXES (dari history koreksi admin)
-    # Update manual di sini setiap minggu/bulan
-    hardcoded_fixes = {
-        "SUGIHANTI": "SUGIANTI",
-        "PCATII": "PERTIWI",
-        "PCATI": "PERTIWI",
-        "PCATWI": "PERTIWI",
-        "MAAGI": "MARGI",
-        "HANJTI": "ANTI",
-        "ANJTI": "ANTI",
-        # ===== TAMBAH KOREKSI BARU DI BAWAH SINI =====
-        # "NAMA_SALAH": "NAMA_BENAR",
-    }
-    
+# --- GOOGLE SHEETS AUTO-SYNC FUNCTIONS ---
+def load_from_gsheet():
+    """AUTO LOAD dari Google Sheets via Apps Script"""
     try:
-        # Priority 1: Coba load dari Streamlit Secrets (PERSISTENT DI CLOUD)
-        if hasattr(st, 'secrets') and 'learned_fixes' in st.secrets:
-            fixes = dict(st.secrets['learned_fixes'])
-            # Merge dengan hardcoded (secrets prioritas lebih tinggi)
-            merged = {**hardcoded_fixes, **fixes}
-            st.sidebar.caption("📡 Database: Secrets + Hardcoded")
-            return merged
+        # Cek apakah ada URL di secrets
+        if 'gsheet' not in st.secrets or 'url' not in st.secrets['gsheet']:
+            return {}
+        
+        url = st.secrets["gsheet"]["url"]
+        response = requests.get(url, timeout=10)
+        
+        if response.status_code == 200:
+            data = response.json()
+            if data.get('success'):
+                count = data.get('count', 0)
+                if count > 0:
+                    st.sidebar.caption(f"📡 Cloud: {count} koreksi loaded")
+                return data.get('data', {})
+        
+        return {}
     except Exception as e:
-        pass
-    
-    try:
-        # Priority 2: Load dari file JSON (untuk local development)
-        if LEARNED_FIXES_FILE.exists():
-            with open(LEARNED_FIXES_FILE, 'r', encoding='utf-8') as f:
-                data = json.load(f)
-                # Merge dengan hardcoded
-                merged = {**hardcoded_fixes, **data}
-                st.sidebar.caption("📁 Database: File + Hardcoded")
-                return merged
-    except Exception as e:
-        pass
-    
-    # Priority 3: Fallback ke hardcoded saja
-    st.sidebar.caption("💾 Database: Hardcoded only")
-    return hardcoded_fixes
+        # Silent fail - fallback ke hardcoded
+        return {}
 
-def save_learned_fixes(fixes_dict):
-    """
-    Save learned fixes:
-    - Local: Save to JSON file
-    - Cloud: Show TOML format untuk manual paste ke Secrets
-    """
-    # Save to local JSON file (untuk development)
+def save_to_gsheet(wrong_name, correct_name):
+    """AUTO SAVE ke Google Sheets via Apps Script"""
     try:
-        with open(LEARNED_FIXES_FILE, 'w', encoding='utf-8') as f:
-            json.dump(fixes_dict, f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        pass
-    
-    # Generate TOML format untuk Streamlit Secrets (Cloud)
-    if fixes_dict:
-        return {
-            'success': True,
-            'toml_format': generate_toml_format(fixes_dict)
+        if 'gsheet' not in st.secrets or 'url' not in st.secrets['gsheet']:
+            return False
+        
+        url = st.secrets["gsheet"]["url"]
+        
+        payload = {
+            "wrong": wrong_name,
+            "correct": correct_name
         }
-    return {'success': True, 'toml_format': None}
-
-def generate_toml_format(fixes_dict):
-    """Generate TOML format untuk Streamlit Secrets"""
-    toml_lines = ["[learned_fixes]"]
-    for wrong, right in sorted(fixes_dict.items()):
-        # Escape quotes in TOML
-        toml_lines.append(f'"{wrong}" = "{right}"')
-    return "\n".join(toml_lines)
+        
+        response = requests.post(
+            url,
+            data=json.dumps(payload),
+            headers={'Content-Type': 'application/json'},
+            timeout=10
+        )
+        
+        if response.status_code == 200:
+            data = response.json()
+            return data.get('success', False)
+        
+        return False
+    except Exception as e:
+        return False
 
 # --- FUNGSI EKSTRAKSI ---
 
@@ -282,7 +258,7 @@ def clean_nik_advanced(text):
 def fix_nama_typo(nama_raw):
     if not nama_raw: return ""
     
-    # Kamus koreksi nama yang sudah terbukti salah dari testing
+    # Kamus koreksi hardcoded (dari testing manual)
     fixes_tested = {
         'SUGIHANTI': 'SUGIANTI', 
         'PCATII': 'PERTIWI', 
@@ -293,61 +269,50 @@ def fix_nama_typo(nama_raw):
         'ANJTI': 'ANTI'
     }
     
-    # Kamus nama Indonesia yang umum (untuk antisipasi kesalahan OCR)
+    # Kamus nama Indonesia umum
     common_names = {
-        # Nama depan wanita
         'SIT1': 'SITI', 'S1TI': 'SITI', 'SlTI': 'SITI',
         'DEW1': 'DEWI', 'DEWl': 'DEWI', 'D3WI': 'DEWI',
         'NUR': 'NUR', 'NUH': 'NUR', 'NUB': 'NUR',
         'SRI': 'SRI', 'SR1': 'SRI', 'SRl': 'SRI',
         'ANI': 'ANI', 'AN1': 'ANI', 'ANl': 'ANI',
-        
-        # Nama depan pria
         'MUHAMAD': 'MUHAMMAD', 'MUHA MAD': 'MUHAMMAD', 'MOHAMAD': 'MUHAMMAD',
         'MOIIAMMAD': 'MUHAMMAD', 'MUIIAMMAD': 'MUHAMMAD',
         'AOMAD': 'AHMAD', 'ACMAD': 'AHMAD', 'AHMAO': 'AHMAD',
         'AGUS': 'AGUS', 'ACUS': 'AGUS', 'AGU5': 'AGUS',
         'BUDI': 'BUDI', 'BUD1': 'BUDI', 'BUDl': 'BUDI',
-        
-        # Nama tengah/belakang yang sering salah
-        'RAHMAWAT1': 'RAHMAWATI', 'RAHMAWATI': 'RAHMAWATI', 'RAHMAWAT': 'RAHMAWATI',
+        'RAHMAWAT1': 'RAHMAWATI', 'RAHMAWAT': 'RAHMAWATI',
         'RAHMAWAN1': 'RAHMAWANI', 'RAHMAWAN': 'RAHMAWANI',
-        'SUGIARTO': 'SUGIARTO', 'SUG1ARTO': 'SUGIARTO', 'SUGlARTO': 'SUGIARTO',
-        'PRAT1WI': 'PRATIWI', 'PRATlWI': 'PRATIWI', 'PRATWI': 'PRATIWI',
-        'PERMATA': 'PERMATA', 'PCRMATA': 'PERMATA', 'PEHMATA': 'PERMATA',
-        'SUSANT1': 'SUSANTI', 'SUSANTl': 'SUSANTI', 'SUSANT': 'SUSANTI',
-        'YUDH1': 'YUDHI', 'YUDHl': 'YUDHI', 'YUDII': 'YUDHI',
-        'KUSUMO': 'KUSUMO', 'KUSUMA': 'KUSUMA', 'KU5UMO': 'KUSUMO',
-        'WIBOWO': 'WIBOWO', 'W1BOWO': 'WIBOWO', 'WlBOWO': 'WIBOWO',
-        'UTAM1': 'UTAMI', 'UTAMl': 'UTAMI', 'UTAM': 'UTAMI',
-        'SETYAN1': 'SETYANI', 'SETYANl': 'SETYANI', 'SETYANT': 'SETYANI',
-        'WIDOD0': 'WIDODO', 'WID0DO': 'WIDODO', 'WIDOD': 'WIDODO',
-        'SUHARTO': 'SUHARTO', 'SUHART0': 'SUHARTO', 'SUIIARTO': 'SUHARTO',
-        'WAHYUD1': 'WAHYUDI', 'WAHYUDl': 'WAHYUDI', 'WAHYUD': 'WAHYUDI',
-        'SUPRI': 'SUPRI', 'SUPH1': 'SUPRI', 'SUPRl': 'SUPRI',
+        'SUGIARTO': 'SUGIARTO', 'SUG1ARTO': 'SUGIARTO',
+        'PRAT1WI': 'PRATIWI', 'PRATlWI': 'PRATIWI',
+        'PERMATA': 'PERMATA', 'PCRMATA': 'PERMATA',
+        'SUSANT1': 'SUSANTI', 'SUSANTl': 'SUSANTI',
+        'YUDH1': 'YUDHI', 'YUDHl': 'YUDHI',
+        'KUSUMO': 'KUSUMO', 'KUSUMA': 'KUSUMA',
+        'WIBOWO': 'WIBOWO', 'W1BOWO': 'WIBOWO',
+        'UTAM1': 'UTAMI', 'UTAMl': 'UTAMI',
+        'SETYAN1': 'SETYANI', 'SETYANl': 'SETYANI',
+        'WIDOD0': 'WIDODO', 'WID0DO': 'WIDODO',
+        'SUHARTO': 'SUHARTO', 'SUHART0': 'SUHARTO',
+        'WAHYUD1': 'WAHYUDI', 'WAHYUDl': 'WAHYUDI',
+        'SUPRI': 'SUPRI', 'SUPH1': 'SUPRI',
     }
     
-    # Gabungkan: learned_fixes (prioritas tertinggi) > fixes_tested > common_names
+    # Gabungkan: cloud_fixes (prioritas tertinggi) > fixes_tested > common_names
     all_fixes = {**common_names, **fixes_tested}
     
-    # Tambahkan learned fixes dari koreksi user (jika ada di session state)
-    if 'learned_fixes' in st.session_state:
+    # Tambahkan learned fixes dari cloud/session
+    if 'learned_fixes' in st.session_state and st.session_state.learned_fixes:
         all_fixes.update(st.session_state.learned_fixes)
     
     result = nama_raw
-    # Terapkan koreksi
     for wrong, right in all_fixes.items():
         result = result.replace(wrong, right)
     
-    # Koreksi karakter umum yang salah terbaca
-    char_fixes = {
-        '1': 'I',  # Angka 1 jadi huruf I
-        '0': 'O',  # Angka 0 jadi huruf O
-        '5': 'S',  # Angka 5 jadi huruf S
-        '8': 'B',  # Angka 8 kadang jadi B (opsional, comment jika terlalu agresif)
-    }
-    for wrong_char, right_char in char_fixes.items():
-        result = result.replace(wrong_char, right_char)
+    # Koreksi karakter umum
+    char_fixes = {'1': 'I', '0': 'O', '5': 'S'}
+    for w, r in char_fixes.items():
+        result = result.replace(w, r)
     
     return result.strip()
 
@@ -399,23 +364,19 @@ def worker_process(file_item, thumbnail_size, reader):
             return None
             
         h, w = img.shape[:2]
-        
-        # Resize untuk OCR - OPTIMIZED SIZE
-        target_width = 1200  # Reduced from 1500 untuk save memory
+        target_width = 1200
         img_ocr = cv2.resize(img, (target_width, int(h * (target_width/w))), interpolation=cv2.INTER_CUBIC)
         gray = cv2.cvtColor(img_ocr, cv2.COLOR_BGR2GRAY)
         processed = cv2.GaussianBlur(gray, (5, 5), 0)
         
-        # OCR
         results = reader.readtext(processed)
         text_list = [r[1] for r in results]
         
-        # Simpan preview
         preview_img = Image.open(io.BytesIO(f_bytes))
         preview_img.thumbnail((thumbnail_size, thumbnail_size))
         
         img_buffer = io.BytesIO()
-        preview_img.save(img_buffer, format='JPEG', quality=85)  # Reduced quality untuk save memory
+        preview_img.save(img_buffer, format='JPEG', quality=85)
         img_buffer.seek(0)
         
         return {
@@ -430,7 +391,6 @@ def worker_process(file_item, thumbnail_size, reader):
 
 # --- UI MAIN ---
 # Header dengan branding BRI
-# Coba load logo kalau ada
 try:
     from pathlib import Path
     logo_path = Path("LOGO.png")
@@ -472,10 +432,9 @@ except:
     </div>
     """, unsafe_allow_html=True)
 
-st.caption("✨ Powered by EasyOCR Technology | v4.3 BRI Edition")
+st.caption("✨ Powered by EasyOCR Technology | v4.4 Auto-Sync Edition")
 
 # Sidebar settings
-# Logo di sidebar
 try:
     from pathlib import Path
     if Path("LOGO.png").exists():
@@ -490,7 +449,7 @@ st.sidebar.markdown("---")
 st.sidebar.info("""
 **⌨️ PANDUAN PENGGUNAAN:**
 1. Upload foto KTP nasabah
-2. Klik **MULAI SCANNING**
+2. Klik **MULAI PEMINDAIAN**
 3. **TAB** = Pindah antar field
 4. Data tersimpan otomatis
 5. Download Excel untuk arsip
@@ -532,7 +491,7 @@ show_field_numbers = st.sidebar.checkbox(
     help="Tampilkan penanda urutan di setiap kolom input"
 )
 
-# ===== INISIALISASI SESSION STATE (HARUS DI SINI!) =====
+# ===== INISIALISASI SESSION STATE =====
 if 'data_db' not in st.session_state:
     st.session_state.data_db = []
 if 'processed_files' not in st.session_state:
@@ -540,11 +499,11 @@ if 'processed_files' not in st.session_state:
 if 'show_kampus_field' not in st.session_state:
     st.session_state.show_kampus_field = False
 
-# Database pembelajaran dari koreksi user - LOAD DARI FILE (PERMANEN)
+# Load learned fixes dari Google Sheets (AUTO-SYNC!)
 if 'learned_fixes' not in st.session_state:
-    st.session_state.learned_fixes = load_learned_fixes()
+    cloud_fixes = load_from_gsheet()
+    st.session_state.learned_fixes = cloud_fixes
     
-# Simpan nama asli hasil OCR untuk tracking
 if 'original_ocr_results' not in st.session_state:
     st.session_state.original_ocr_results = {}
 
@@ -556,36 +515,11 @@ if st.session_state.learned_fixes:
     total = len(st.session_state.learned_fixes)
     st.sidebar.success(f"📚 {total} koreksi tersimpan")
     
-    with st.sidebar.expander(f"📖 Database Koreksi ({total})"):
+    with st.sidebar.expander(f"📖 Database ({total} koreksi)"):
         for idx, (wrong, right) in enumerate(sorted(st.session_state.learned_fixes.items()), 1):
             st.write(f"{idx}. `{wrong}` → `{right}`")
-        
-        st.markdown("---")
-        st.markdown("**💾 Export untuk Cloud Permanent:**")
-        
-        # Generate TOML untuk Streamlit Secrets
-        toml_data = generate_toml_format(st.session_state.learned_fixes)
-        st.code(toml_data, language="toml")
-        
-        st.info("""
-        **📋 Cara Simpan Permanent di Cloud:**
-        1. Copy kode TOML di atas
-        2. Buka App → Settings → Secrets
-        3. Paste di bagian paling bawah
-        4. Save → Redeploy otomatis
-        """, icon="💡")
-        
-        if st.button("🗑️ Reset Pembelajaran", key="reset_learning"):
-            if st.session_state.get('confirm_reset', False):
-                st.session_state.learned_fixes = {}
-                save_learned_fixes({})
-                st.session_state.confirm_reset = False
-                st.rerun()
-            else:
-                st.session_state.confirm_reset = True
-                st.warning("⚠️ Klik lagi untuk konfirmasi reset!")
 else:
-    st.sidebar.info("💡 Belum ada pembelajaran.\n\nSistem akan belajar saat admin mengoreksi nama hasil OCR.", icon="🎓")
+    st.sidebar.info("💡 Belum ada pembelajaran.\n\nSistem akan otomatis belajar saat admin mengoreksi nama OCR.", icon="🎓")
 
 st.sidebar.markdown("---")
 st.sidebar.markdown("**📚 Opsi Tambahan**")
@@ -654,15 +588,21 @@ if st.session_state.data_db:
                         help="Tab untuk pindah ke NIK"
                     )
                     
-                    # Deteksi perubahan nama dan simpan ke learned fixes
+                    # AUTO-SAVE ke Google Sheets saat ada perubahan
                     if new_nama != row["NAMA"] and row.get("KTP_ID"):
                         ktp_id = row["KTP_ID"]
                         if ktp_id in st.session_state.original_ocr_results:
                             original_nama = st.session_state.original_ocr_results[ktp_id]["NAMA"]
-                            # Jika user mengubah nama, simpan koreksi
+                            
                             if new_nama and original_nama and new_nama != original_nama:
+                                # Update session state
                                 st.session_state.learned_fixes[original_nama] = new_nama
-                                st.success(f"🧠 Sistem belajar: '{original_nama}' → '{new_nama}'", icon="✅")
+                                
+                                # AUTO-SAVE ke Google Sheets
+                                if save_to_gsheet(original_nama, new_nama):
+                                    st.success(f"🧠 Auto-saved: `{original_nama}` → `{new_nama}`", icon="✅")
+                                else:
+                                    st.info(f"💾 Saved locally: `{original_nama}` → `{new_nama}`", icon="ℹ️")
                         
                         st.session_state.data_db[idx]["NAMA"] = new_nama
                     
@@ -727,7 +667,6 @@ if st.session_state.data_db:
                     if new_email != row.get("EMAIL", ""):
                         st.session_state.data_db[idx]["EMAIL"] = new_email
                     
-                    # Field Kampus (conditional)
                     if show_kampus_field:
                         label_kampus = "7️⃣ Kampus/Universitas" if show_field_numbers else "Kampus/Universitas"
                         new_kampus = st.text_input(
@@ -751,14 +690,12 @@ with button_placeholder:
     if uploaded_files:
         new_files = [f for f in uploaded_files if f.name not in st.session_state.processed_files]
         
-        # LIMIT untuk cloud
         if len(new_files) > 5:
             st.warning("⚠️ Batasan sistem: Maksimal 5 KTP per sesi pemindaian. Silakan upload ulang dalam jumlah lebih kecil.", icon="⚠️")
             new_files = new_files[:5]
         
         if new_files:
             if st.button("🚀 MULAI PEMINDAIAN", type="primary", use_container_width=True):
-                # Load OCR
                 reader = load_ocr()
                 
                 if reader is None:
@@ -768,15 +705,13 @@ with button_placeholder:
                         bar = st.progress(0)
                         txt = st.empty()
                     
-                    # Process satu-satu untuk avoid memory issues
                     for i, file_item in enumerate(new_files):
                         txt.info(f"⏳ Memproses: {file_item.name} ({i+1}/{len(new_files)})...")
                         
                         res = worker_process(file_item, preview_width, reader)
                         
                         if res:
-                            # Simpan hasil OCR asli untuk tracking
-                            ktp_id = f"ktp_{len(st.session_state.data_db)}"
+                            ktp_id = f"ktp_{len(st.session_state.data_db)}_{res['FILENAME']}"
                             st.session_state.original_ocr_results[ktp_id] = {
                                 "NAMA": res["NAMA"],
                                 "NOMORIDENTITAS": res["NOMORIDENTITAS"]
@@ -889,6 +824,6 @@ st.divider()
 st.markdown("""
 <div style="text-align: center; color: #0067B8; padding: 1rem;">
     <strong>Bank Rakyat Indonesia (Persero) Tbk.</strong><br>
-    <small>KTP Digital Scanner v4.3 BRI Edition | Powered by EasyOCR Technology</small>
+    <small>KTP Digital Scanner v4.4 Auto-Sync Edition | Powered by EasyOCR + Google Sheets</small>
 </div>
 """, unsafe_allow_html=True)
