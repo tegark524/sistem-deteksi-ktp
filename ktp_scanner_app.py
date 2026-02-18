@@ -195,12 +195,28 @@ LEARNED_FIXES_FILE = Path("learned_fixes.json")
 
 def load_learned_fixes():
     """Load learned fixes dari Streamlit secrets (priority) atau file JSON (fallback)"""
+    # HARDCODED LEARNED FIXES (dari history koreksi admin)
+    # Update manual di sini setiap minggu/bulan
+    hardcoded_fixes = {
+        "SUGIHANTI": "SUGIANTI",
+        "PCATII": "PERTIWI",
+        "PCATI": "PERTIWI",
+        "PCATWI": "PERTIWI",
+        "MAAGI": "MARGI",
+        "HANJTI": "ANTI",
+        "ANJTI": "ANTI",
+        # ===== TAMBAH KOREKSI BARU DI BAWAH SINI =====
+        # "NAMA_SALAH": "NAMA_BENAR",
+    }
+    
     try:
         # Priority 1: Coba load dari Streamlit Secrets (PERSISTENT DI CLOUD)
         if hasattr(st, 'secrets') and 'learned_fixes' in st.secrets:
             fixes = dict(st.secrets['learned_fixes'])
-            st.sidebar.caption("📡 Database loaded from Secrets (Cloud)")
-            return fixes
+            # Merge dengan hardcoded (secrets prioritas lebih tinggi)
+            merged = {**hardcoded_fixes, **fixes}
+            st.sidebar.caption("📡 Database: Secrets + Hardcoded")
+            return merged
     except Exception as e:
         pass
     
@@ -209,12 +225,16 @@ def load_learned_fixes():
         if LEARNED_FIXES_FILE.exists():
             with open(LEARNED_FIXES_FILE, 'r', encoding='utf-8') as f:
                 data = json.load(f)
-                st.sidebar.caption("📁 Database loaded from file (Local)")
-                return data
+                # Merge dengan hardcoded
+                merged = {**hardcoded_fixes, **data}
+                st.sidebar.caption("📁 Database: File + Hardcoded")
+                return merged
     except Exception as e:
         pass
     
-    return {}
+    # Priority 3: Fallback ke hardcoded saja
+    st.sidebar.caption("💾 Database: Hardcoded only")
+    return hardcoded_fixes
 
 def save_learned_fixes(fixes_dict):
     """
