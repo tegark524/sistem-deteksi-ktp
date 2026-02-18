@@ -241,6 +241,76 @@ def save_to_gsheet(wrong_name, correct_name):
     except Exception as e:
         return False
 
+# --- FUNGSI AUTO-ROTATE KTP ---
+def auto_rotate_ktp(image):
+    """
+    Deteksi orientasi KTP dan rotate otomatis
+    Returns: rotated image
+    """
+    try:
+        # Convert ke grayscale
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Detect edges
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+        
+        # Detect lines menggunakan Hough Transform
+        lines = cv2.HoughLines(edges, 1, np.pi/180, 200)
+        
+        if lines is not None:
+            # Hitung rata-rata sudut dari lines yang terdeteksi
+            angles = []
+            for rho, theta in lines[:20]:  # Ambil 20 lines pertama
+                angle = np.degrees(theta) - 90
+                angles.append(angle)
+            
+            # Median angle untuk avoid outliers
+            median_angle = np.median(angles)
+            
+            # Jika sudut miring > 5 derajat, rotate
+            if abs(median_angle) > 5:
+                # Get image center
+                (h, w) = image.shape[:2]
+                center = (w // 2, h // 2)
+                
+                # Rotation matrix
+                M = cv2.getRotationMatrix2D(center, median_angle, 1.0)
+                
+                # Rotate image
+                rotated = cv2.warpAffine(
+                    image, M, (w, h),
+                    flags=cv2.INTER_CUBIC,
+                    borderMode=cv2.BORDER_REPLICATE
+                )
+                
+                return rotated, median_angle
+        
+        return image, 0
+        
+    except Exception as e:
+        # Jika gagal, return image asli
+        return image, 0
+
+def detect_ktp_orientation(image):
+    """
+    Deteksi orientasi KTP (landscape vs portrait)
+    dan rotate jika perlu
+    """
+    try:
+        h, w = image.shape[:2]
+        
+        # KTP seharusnya landscape (width > height)
+        # Jika portrait (height > width), rotate 90 derajat
+        if h > w:
+            # Rotate 90 degrees
+            rotated = cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)
+            return rotated, 90
+        
+        return image, 0
+        
+    except Exception as e:
+        return image, 0
+
 # --- FUNGSI EKSTRAKSI ---
 
 def clean_nik_advanced(text):
@@ -362,28 +432,53 @@ def worker_process(file_item, thumbnail_size, reader):
         if img is None:
             st.error(f"❌ Cannot decode image: {file_item.name}")
             return None
-            
+        
+        # STEP 1: Deteksi orientasi (portrait vs landscape)
+        img, orientation_angle = detect_ktp_orientation(img)
+        
+        # STEP 2: Auto-rotate untuk koreksi kemiringan
+        img, rotation_angle = auto_rotate_ktp(img)
+        
         h, w = img.shape[:2]
+        
+        # STEP 3: Resize untuk OCR
         target_width = 1200
         img_ocr = cv2.resize(img, (target_width, int(h * (target_width/w))), interpolation=cv2.INTER_CUBIC)
-        gray = cv2.cvtColor(img_ocr, cv2.COLOR_BGR2GRAY)
-        processed = cv2.GaussianBlur(gray, (5, 5), 0)
         
+        # STEP 4: Preprocessing
+        gray = cv2.cvtColor(img_ocr, cv2.COLOR_BGR2GRAY)
+        
+        # Enhance contrast untuk OCR lebih baik
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8,8))
+        gray = clahe.apply(gray)
+        
+        # Denoise
+        processed = cv2.GaussianBlur(gray, (3, 3), 0)
+        
+        # STEP 5: OCR
         results = reader.readtext(processed)
         text_list = [r[1] for r in results]
         
-        preview_img = Image.open(io.BytesIO(f_bytes))
+        # STEP 6: Simpan preview (gunakan image yang sudah di-rotate)
+        preview_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         preview_img.thumbnail((thumbnail_size, thumbnail_size))
         
         img_buffer = io.BytesIO()
         preview_img.save(img_buffer, format='JPEG', quality=85)
         img_buffer.seek(0)
         
+        rotation_info = ""
+        if orientation_angle != 0:
+            rotation_info += f" (rotated {orientation_angle}°)"
+        if rotation_angle != 0:
+            rotation_info += f" (adjusted {rotation_angle:.1f}°)"
+        
         return {
             "IMAGE_DATA": img_buffer.getvalue(),
             "NAMA": extract_nama(text_list),
             "NOMORIDENTITAS": extract_nik(text_list),
-            "FILENAME": file_item.name
+            "FILENAME": file_item.name,
+            "ROTATION_INFO": rotation_info
         }
     except Exception as e:
         st.error(f"❌ Error processing {file_item.name}: {str(e)}")
@@ -729,6 +824,12 @@ with button_placeholder:
                                 "KAMPUS": ""
                             })
                             st.session_state.processed_files.add(res["FILENAME"])
+                            
+                            # Show rotation info if any
+                            if res.get("ROTATION_INFO"):
+                                txt.success(f"✅ {file_item.name}{res['ROTATION_INFO']}")
+                        else:
+                            txt.warning(f"⚠️ {file_item.name} gagal diproses")
                         
                         bar.progress((i + 1) / len(new_files))
                     
