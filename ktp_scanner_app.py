@@ -241,6 +241,56 @@ def save_to_gsheet(wrong_name, correct_name):
     except Exception as e:
         return False
 
+# --- FUNGSI VALIDASI KUALITAS FOTO ---
+def check_image_quality(image):
+    """
+    Validasi kualitas foto KTP sebelum OCR
+    Returns: (is_valid, message)
+    """
+    try:
+        h, w = image.shape[:2]
+        
+        # 1. Cek resolusi minimal
+        if w < 300 or h < 200:
+            return False, "❌ Resolusi terlalu kecil. Min: 300x200 px"
+        
+        # 2. Cek aspect ratio (KTP = landscape, ~1.5:1)
+        aspect_ratio = w / h if h > 0 else 0
+        if aspect_ratio < 1.2 or aspect_ratio > 2.0:
+            return False, f"❌ Rasio foto aneh ({aspect_ratio:.2f}:1). KTP harus landscape ~1.5:1"
+        
+        # 3. Cek blur/focus (Laplacian variance)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+        
+        if laplacian_var < 100:
+            return False, f"❌ Foto terlalu blur (focus score: {laplacian_var:.0f}). Min: 100"
+        
+        # 4. Cek brightness (jangan terlalu gelap/terang)
+        mean_brightness = np.mean(gray)
+        
+        if mean_brightness < 50:
+            return False, f"❌ Foto terlalu gelap (brightness: {mean_brightness:.0f}). Min: 50"
+        
+        if mean_brightness > 220:
+            return False, f"❌ Foto terlalu terang/overexposed (brightness: {mean_brightness:.0f}). Max: 220"
+        
+        # 5. Cek apakah ada multiple cards (detect multiple rectangles)
+        edges = cv2.Canny(gray, 50, 150)
+        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        large_contours = [c for c in contours if cv2.contourArea(c) > (w * h * 0.1)]
+        
+        if len(large_contours) > 2:
+            return False, "❌ Terdeteksi multiple KTP dalam 1 foto. Upload 1 KTP per foto!"
+        
+        # All checks passed
+        return True, f"✅ Kualitas OK (focus: {laplacian_var:.0f}, brightness: {mean_brightness:.0f})"
+        
+    except Exception as e:
+        # Jika validasi error, tetap lanjut (better than blocking)
+        return True, "⚠️ Validasi skip"
+
 # --- FUNGSI AUTO-ROTATE KTP ---
 def auto_rotate_ktp(image):
     """
@@ -453,8 +503,13 @@ def extract_nama(text_list):
         "TANGGAL", "TEMPAT", "JENIS", "KELAMIN", "GOLONGAN", "GOLAN",
         "KEWARGANEGARAAN", "WARGA", "NEGARA", "REPUBLIK", "INDONESIA",
         "SIDOARJO", "SURABAYA", "MOJOKERTO", "JAWA", "TIMUR", "BARAT",
-        "SELATAN", "UTARA", "TENGAH"
+        "SELATAN", "UTARA", "TENGAH", "KARYAWAN", "SWASTA", "PEDAGANG",
+        "PETANI", "BURUH", "PNS", "TNI", "POLRI", "MENGURUS", "RUMAH",
+        "TANGGA", "PELAJAR", "MAHASISWA"
     ]
+    
+    # Deteksi multiple names (red flag!)
+    potential_names = []
     
     # STRATEGI 1: Cari setelah label "Nama" atau "Namà"
     for i, text in enumerate(text_list):
@@ -470,12 +525,17 @@ def extract_nama(text_list):
                 if len(cleaned) < 5:
                     continue
                 
-                # Filter: Max 50 karakter (nama terlalu panjang = junk)
-                if len(cleaned) > 50:
+                # Filter: Max 40 karakter (nama terlalu panjang = junk)
+                if len(cleaned) > 40:
                     continue
                 
                 # Filter: Harus ada spasi (nama lengkap minimal 2 kata)
-                if ' ' not in cleaned:
+                words = cleaned.split()
+                if len(words) < 2:
+                    continue
+                
+                # Filter: Max 4 kata (lebih dari 4 = aneh)
+                if len(words) > 4:
                     continue
                 
                 # Filter: Skip jika ada kata blacklist
@@ -484,12 +544,26 @@ def extract_nama(text_list):
                 
                 # Filter: Skip jika ada angka banyak di text asli
                 digit_count = sum(c.isdigit() for c in candidate)
-                if digit_count > 3:  # Max 3 angka (misal: nama seperti "AHMAD 3")
+                if digit_count > 2:  # Max 2 angka
                     continue
                 
-                return fix_nama_typo(cleaned)
+                # Filter: Setiap kata harus panjangnya wajar (3-15 char)
+                if any(len(word) < 3 or len(word) > 15 for word in words):
+                    continue
+                
+                potential_names.append(fix_nama_typo(cleaned))
+                break  # Ambil 1 nama pertama setelah label "Nama"
     
-    # STRATEGI 2: Cari text terpanjang yang valid
+    # DETEKSI MULTIPLE NAMES (foto kemungkinan multiple KTP!)
+    if len(potential_names) > 1:
+        # Ini kemungkinan multiple KTP dalam 1 foto!
+        # Return empty untuk trigger error
+        return ""
+    
+    if potential_names:
+        return potential_names[0]
+    
+    # STRATEGI 2: Cari text terpanjang yang valid (fallback)
     valid_candidates = []
     
     for text in text_list:
@@ -497,12 +571,12 @@ def extract_nama(text_list):
         cleaned = re.sub(r'[^A-Z\s]', '', text.upper()).strip()
         
         # Filter basic
-        if len(cleaned) < 10 or len(cleaned) > 50:
+        if len(cleaned) < 10 or len(cleaned) > 40:
             continue
         
-        # Harus ada minimal 2 kata
+        # Harus ada minimal 2 kata, max 4 kata
         words = cleaned.split()
-        if len(words) < 2:
+        if len(words) < 2 or len(words) > 4:
             continue
         
         # Skip jika ada blacklist
@@ -510,15 +584,20 @@ def extract_nama(text_list):
             continue
         
         # Skip jika kata terlalu panjang (> 15 karakter per kata = aneh)
-        if any(len(word) > 15 for word in words):
+        if any(len(word) < 3 or len(word) > 15 for word in words):
             continue
         
         # Hitung angka di text asli
         digit_count = sum(c.isdigit() for c in text)
-        if digit_count > 3:
+        if digit_count > 2:
             continue
         
         valid_candidates.append(cleaned)
+    
+    # DETEKSI MULTIPLE VALID CANDIDATES (kemungkinan multiple KTP)
+    if len(valid_candidates) > 2:
+        # Terlalu banyak nama detected = multiple KTP!
+        return ""
     
     # Ambil yang terpanjang dari candidates
     if valid_candidates:
@@ -538,8 +617,21 @@ def worker_process(file_item, thumbnail_size, reader):
         img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
         
         if img is None:
-            st.error(f"❌ Cannot decode image: {file_item.name}")
-            return None
+            return {
+                "error": True,
+                "message": f"❌ Cannot decode image: {file_item.name}",
+                "FILENAME": file_item.name
+            }
+        
+        # VALIDASI KUALITAS FOTO (CRITICAL!)
+        is_valid, quality_msg = check_image_quality(img)
+        
+        if not is_valid:
+            return {
+                "error": True,
+                "message": f"{file_item.name}: {quality_msg}",
+                "FILENAME": file_item.name
+            }
         
         # STEP 1: Deteksi orientasi (portrait vs landscape)
         img, orientation_angle = detect_ktp_orientation(img)
@@ -590,7 +682,33 @@ def worker_process(file_item, thumbnail_size, reader):
             else:
                 text_list.append(raw_text)
         
-        # STEP 6: Simpan preview (gunakan image yang sudah di-rotate)
+        # STEP 6: Extract data
+        extracted_name = extract_nama(text_list)
+        extracted_nik = extract_nik(text_list)
+        
+        # VALIDASI HASIL OCR
+        if not extracted_name and not extracted_nik:
+            return {
+                "error": True,
+                "message": f"{file_item.name}: ❌ GAGAL! Kemungkinan:\n• Multiple KTP dalam 1 foto\n• Foto blur/gelap\n• Screenshot dari PDF/WA\n\n💡 Upload 1 KTP per foto dengan kamera langsung!",
+                "FILENAME": file_item.name
+            }
+        
+        if not extracted_name:
+            return {
+                "error": True,
+                "message": f"{file_item.name}: ❌ Nama tidak terdeteksi. Kemungkinan multiple KTP atau foto tidak fokus. Coba foto ulang 1 KTP saja!",
+                "FILENAME": file_item.name
+            }
+        
+        if not extracted_nik:
+            return {
+                "error": True,
+                "message": f"{file_item.name}: ❌ NIK tidak terdeteksi. Pastikan bagian NIK jelas & tidak tertutup bayangan!",
+                "FILENAME": file_item.name
+            }
+        
+        # STEP 7: Simpan preview (gunakan image yang sudah di-rotate)
         preview_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
         preview_img.thumbnail((thumbnail_size, thumbnail_size))
         
@@ -598,22 +716,26 @@ def worker_process(file_item, thumbnail_size, reader):
         preview_img.save(img_buffer, format='JPEG', quality=85)
         img_buffer.seek(0)
         
-        rotation_info = ""
+        rotation_info = quality_msg
         if orientation_angle != 0:
             rotation_info += f" (rotated {orientation_angle}°)"
         if rotation_angle != 0:
             rotation_info += f" (adjusted {rotation_angle:.1f}°)"
         
         return {
+            "error": False,
             "IMAGE_DATA": img_buffer.getvalue(),
-            "NAMA": extract_nama(text_list),
-            "NOMORIDENTITAS": extract_nik(text_list),
+            "NAMA": extracted_name,
+            "NOMORIDENTITAS": extracted_nik,
             "FILENAME": file_item.name,
             "ROTATION_INFO": rotation_info
         }
     except Exception as e:
-        st.error(f"❌ Error processing {file_item.name}: {str(e)}")
-        return None
+        return {
+            "error": True,
+            "message": f"❌ Error processing {file_item.name}: {str(e)}",
+            "FILENAME": file_item.name
+        }
 
 # --- UI MAIN ---
 # Header dengan branding BRI
@@ -674,13 +796,18 @@ st.sidebar.markdown("---")
 
 st.sidebar.info("""
 **⌨️ PANDUAN PENGGUNAAN:**
-1. Upload foto KTP nasabah
-2. Klik **MULAI PEMINDAIAN**
-3. **TAB** = Pindah antar field
-4. Data tersimpan otomatis
-5. Download Excel untuk arsip
+1. Foto KTP dengan kamera langsung
+2. **1 KTP per foto** (penting!)
+3. Landscape, fokus, cahaya cukup
+4. Klik **MULAI PEMINDAIAN**
+5. **TAB** = Pindah antar field
+6. Data tersimpan otomatis
 
-💡 **Tips:** Gunakan foto KTP yang jelas & pencahayaan baik
+❌ **JANGAN:**
+• Multiple KTP dalam 1 foto
+• Screenshot dari PDF/WhatsApp
+• Foto blur atau gelap
+• Foto terlalu miring
 """, icon="ℹ️")
 
 st.sidebar.warning("""
@@ -936,7 +1063,8 @@ with button_placeholder:
                         
                         res = worker_process(file_item, preview_width, reader)
                         
-                        if res:
+                        if res and not res.get("error"):
+                            # SUCCESS - Add to database
                             ktp_id = f"ktp_{len(st.session_state.data_db)}_{res['FILENAME']}"
                             st.session_state.original_ocr_results[ktp_id] = {
                                 "NAMA": res["NAMA"],
@@ -956,11 +1084,17 @@ with button_placeholder:
                             })
                             st.session_state.processed_files.add(res["FILENAME"])
                             
-                            # Show rotation info if any
+                            # Show success with quality info
                             if res.get("ROTATION_INFO"):
-                                txt.success(f"✅ {file_item.name}{res['ROTATION_INFO']}")
+                                txt.success(f"✅ {file_item.name}: {res['ROTATION_INFO']}")
+                        
+                        elif res and res.get("error"):
+                            # ERROR - Show message but continue
+                            txt.error(res.get("message", f"❌ {file_item.name} gagal diproses"))
+                        
                         else:
-                            txt.warning(f"⚠️ {file_item.name} gagal diproses")
+                            # NULL response
+                            txt.warning(f"⚠️ {file_item.name} tidak bisa diproses")
                         
                         bar.progress((i + 1) / len(new_files))
                     
