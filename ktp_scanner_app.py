@@ -258,37 +258,41 @@ def check_image_quality(image):
         if w < 400 or h < 250:
             warnings.append(f"⚠️ Resolusi rendah ({w}x{h}), hasil OCR mungkin kurang akurat")
         
-        # 2. Cek aspect ratio (lebih toleran)
-        aspect_ratio = w / h if h > 0 else 0
-        if aspect_ratio < 0.8 or aspect_ratio > 2.5:
-            return False, f"❌ Rasio foto aneh ({aspect_ratio:.2f}:1). KTP harus landscape", warnings
+        # 2. Cek aspect ratio - SKIP! Terlalu banyak false positive
+        # Banyak foto KTP yang valid tapi aspect ratio aneh karena:
+        # - Foto miring/rotated
+        # - Ada border/margin
+        # - Cropped tidak sempurna
+        # - Screenshot dengan padding
+        
+        # aspect_ratio = w / h if h > 0 else 0
+        # if aspect_ratio < 0.8 or aspect_ratio > 2.5:
+        #     warnings.append(f"⚠️ Rasio foto {aspect_ratio:.2f}:1 (ideal: ~1.5:1)")
         
         # 3. Cek blur/focus (lebih toleran)
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
         
-        if laplacian_var < 50:
-            return False, f"❌ Foto terlalu blur (score: {laplacian_var:.0f}). Min: 50", warnings
+        if laplacian_var < 30:  # Turunin dari 50
+            return False, f"❌ Foto terlalu blur (score: {laplacian_var:.0f}). Min: 30", warnings
         
-        if laplacian_var < 100:
+        if laplacian_var < 80:  # Warning threshold
             warnings.append(f"⚠️ Foto agak blur (score: {laplacian_var:.0f})")
         
         # 4. Cek brightness (lebih toleran)
         mean_brightness = np.mean(gray)
         
-        if mean_brightness < 30:
-            return False, f"❌ Foto terlalu gelap ({mean_brightness:.0f}). Min: 30", warnings
+        if mean_brightness < 20:  # Turunin dari 30
+            return False, f"❌ Foto terlalu gelap ({mean_brightness:.0f}). Min: 20", warnings
         
-        if mean_brightness > 240:
-            return False, f"❌ Foto terlalu terang ({mean_brightness:.0f}). Max: 240", warnings
+        if mean_brightness > 245:  # Naikin dari 240
+            return False, f"❌ Foto terlalu terang ({mean_brightness:.0f}). Max: 245", warnings
         
-        if mean_brightness < 60:
+        if mean_brightness < 50:
             warnings.append(f"⚠️ Foto agak gelap ({mean_brightness:.0f})")
         
-        if mean_brightness > 200:
+        if mean_brightness > 210:
             warnings.append(f"⚠️ Foto agak terang ({mean_brightness:.0f})")
-        
-        # 5. Skip multi-card detection (terlalu strict, sering false positive)
         
         # All checks passed
         quality_score = f"OK (focus: {laplacian_var:.0f}, brightness: {mean_brightness:.0f})"
