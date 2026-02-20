@@ -306,14 +306,15 @@ def check_image_quality(image):
 def detect_and_crop_ktp(image):
     """
     Deteksi area KTP dalam screenshot/dokumen dan crop
+    Improved: Handle multiple KTP, KTP dengan text form di bawah
     Returns: cropped KTP image atau original jika tidak detect
     """
     try:
         h, w = image.shape[:2]
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         
-        # Edge detection
-        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+        # Method 1: Cari KTP area dengan edge detection
+        edges = cv2.Canny(gray, 30, 100)
         
         # Dilate untuk connect edges
         kernel = np.ones((5,5), np.uint8)
@@ -327,27 +328,63 @@ def detect_and_crop_ktp(image):
         for contour in contours:
             area = cv2.contourArea(contour)
             
-            # KTP minimal 20% dari total area, max 80%
-            if area < (w * h * 0.2) or area > (w * h * 0.8):
+            # KTP minimal 15% dari total area, max 90%
+            if area < (w * h * 0.15) or area > (w * h * 0.90):
                 continue
             
             # Get bounding box
             x, y, cw, ch = cv2.boundingRect(contour)
             
-            # Aspect ratio KTP ~ 1.5-1.6
-            aspect = cw / ch if ch > 0 else 0
-            if aspect < 1.3 or aspect > 1.8:
+            # Skip jika terlalu kecil
+            if cw < 200 or ch < 100:
                 continue
             
-            ktp_candidates.append((area, x, y, cw, ch))
-        
-        # Ambil candidate terbesar
-        if ktp_candidates:
-            ktp_candidates.sort(reverse=True, key=lambda x: x[0])
-            _, x, y, cw, ch = ktp_candidates[0]
+            # Aspect ratio KTP ~ 1.4-1.7, tapi lebih toleran
+            aspect = cw / ch if ch > 0 else 0
+            if aspect < 1.2 or aspect > 2.0:
+                continue
             
-            # Crop dengan margin
-            margin = 10
+            ktp_candidates.append((area, x, y, cw, ch, aspect))
+        
+        # Method 2: Jika tidak detect dengan edge, coba detect blue area (KTP warna biru)
+        if not ktp_candidates:
+            hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
+            
+            # Range warna biru KTP (cyan-blue)
+            lower_blue = np.array([80, 40, 40])
+            upper_blue = np.array([130, 255, 255])
+            
+            mask_blue = cv2.inRange(hsv, lower_blue, upper_blue)
+            
+            # Find contours dari blue area
+            contours_blue, _ = cv2.findContours(mask_blue, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            
+            for contour in contours_blue:
+                area = cv2.contourArea(contour)
+                
+                if area < (w * h * 0.15) or area > (w * h * 0.90):
+                    continue
+                
+                x, y, cw, ch = cv2.boundingRect(contour)
+                
+                if cw < 200 or ch < 100:
+                    continue
+                
+                aspect = cw / ch if ch > 0 else 0
+                if aspect < 1.2 or aspect > 2.0:
+                    continue
+                
+                ktp_candidates.append((area, x, y, cw, ch, aspect))
+        
+        # Ambil candidate terbaik (yang paling landscape & cukup besar)
+        if ktp_candidates:
+            # Sort by: aspect ratio mendekati 1.5 (ideal KTP), lalu by area
+            ktp_candidates.sort(key=lambda x: (abs(x[5] - 1.58), -x[0]))
+            
+            _, x, y, cw, ch, _ = ktp_candidates[0]
+            
+            # Crop dengan margin kecil
+            margin = 5
             x1 = max(0, x - margin)
             y1 = max(0, y - margin)
             x2 = min(w, x + cw + margin)
@@ -356,7 +393,7 @@ def detect_and_crop_ktp(image):
             cropped = image[y1:y2, x1:x2]
             
             # Validasi crop tidak terlalu kecil
-            if cropped.shape[0] > 100 and cropped.shape[1] > 100:
+            if cropped.shape[0] > 100 and cropped.shape[1] > 150:
                 return cropped, True
         
         # Jika tidak detect, return original
@@ -640,6 +677,20 @@ def worker_process(file_item, thumbnail_size, reader):
         # STEP 0: Detect & Crop KTP dari screenshot (jika ada text/form di sekitar KTP)
         img, was_cropped = detect_and_crop_ktp(img)
         
+        # MEMORY OPTIMIZATION: Reduce image size jika terlalu besar
+        h_orig, w_orig = img.shape[:2]
+        max_dimension = 2000  # Max width/height sebelum OCR
+        
+        if w_orig > max_dimension or h_orig > max_dimension:
+            scale = max_dimension / max(w_orig, h_orig)
+            new_w = int(w_orig * scale)
+            new_h = int(h_orig * scale)
+            img = cv2.resize(img, (new_w, new_h), interpolation=cv2.INTER_AREA)
+            
+            # Force cleanup
+            import gc
+            gc.collect()
+        
         # VALIDASI KUALITAS FOTO (CRITICAL!)
         is_valid, quality_msg, warnings = check_image_quality(img)
         
@@ -658,9 +709,21 @@ def worker_process(file_item, thumbnail_size, reader):
         
         h, w = img.shape[:2]
         
-        # STEP 3: Resize untuk OCR
-        target_width = 1500  # Back to 1500 (original yang bagus)
-        img_ocr = cv2.resize(img, (target_width, int(h * (target_width/w))), interpolation=cv2.INTER_CUBIC)
+        # STEP 3: Resize untuk OCR - OPTIMIZED untuk cloud
+        h, w = img.shape[:2]
+        
+        # Adaptive sizing: lebih kecil untuk file besar
+        if w > 2000 or h > 1500:
+            target_width = 1200  # Smaller untuk save memory
+        else:
+            target_width = 1500  # Normal size
+        
+        img_ocr = cv2.resize(img, (target_width, int(h * (target_width/w))), interpolation=cv2.INTER_AREA)
+        
+        # Clear original large image dari memory
+        del img
+        import gc
+        gc.collect()
         
         # STEP 4: Preprocessing - SIMPLE IS BETTER!
         gray = cv2.cvtColor(img_ocr, cv2.COLOR_BGR2GRAY)
@@ -668,15 +731,32 @@ def worker_process(file_item, thumbnail_size, reader):
         # Just blur, jangan terlalu banyak processing
         processed = cv2.GaussianBlur(gray, (5, 5), 0)
         
+        # Clear intermediate
+        del gray
+        gc.collect()
+        
         # STEP 5: OCR
         results = reader.readtext(processed)
+        
+        # Clear processed image
+        del processed
+        gc.collect()
         
         # Simple text extraction - jangan over-filter!
         text_list = [r[1].strip() for r in results if len(r[1].strip()) > 1]
         
+        # Clear OCR results
+        del results
+        gc.collect()
+        
         # STEP 6: Extract data
         extracted_name = extract_nama(text_list)
         extracted_nik = extract_nik(text_list)
+        
+        # Clear text list
+        del text_list
+        import gc
+        gc.collect()
         
         # VALIDASI HASIL OCR
         if not extracted_name and not extracted_nik:
@@ -700,13 +780,21 @@ def worker_process(file_item, thumbnail_size, reader):
                 "FILENAME": file_item.name
             }
         
-        # STEP 7: Simpan preview (gunakan image yang sudah di-rotate)
-        preview_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-        preview_img.thumbnail((thumbnail_size, thumbnail_size))
+        # STEP 7: Simpan preview - OPTIMIZED SIZE
+        # Baca ulang dari file bytes (lebih hemat memory)
+        preview_img = Image.open(io.BytesIO(f_bytes))
+        
+        # Thumbnail size adaptive
+        thumb_size = min(thumbnail_size, 400)  # Max 400px untuk save memory
+        preview_img.thumbnail((thumb_size, thumb_size), Image.LANCZOS)
         
         img_buffer = io.BytesIO()
-        preview_img.save(img_buffer, format='JPEG', quality=85)
+        preview_img.save(img_buffer, format='JPEG', quality=75, optimize=True)  # Lower quality
         img_buffer.seek(0)
+        
+        # Clear preview
+        del preview_img
+        gc.collect()
         
         rotation_info = quality_msg
         if was_cropped:
@@ -808,13 +896,16 @@ st.sidebar.info("""
 
 st.sidebar.warning("""
 **⚠️ Tips Optimal Processing:**
-- Sistem proses 1 file per saat
-- Delay 0.5 detik antar file (avoid crash)
-- Max recommended: 10-15 file per batch
-- File besar (>2MB): max 5-10 per batch
-- Jika crash: coba batch lebih kecil
+- **1 file per detik** (with cleanup)
+- **Max 8-10 file** per batch (recommended)
+- File >1MB: Max 5 per batch
+- Jika crash: Batch lebih kecil (3-5 files)
 
-💡 **Untuk banyak file:** Upload multiple batch!
+⏱️ **Estimasi waktu:**
+- 5 files: ~10 detik
+- 10 files: ~20 detik
+
+💡 **Best practice:** Upload 5-8 files per batch!
 """, icon="⚠️")
 
 st.sidebar.markdown("---")
@@ -1043,19 +1134,38 @@ with button_placeholder:
         new_files = [f for f in uploaded_files if f.name not in st.session_state.processed_files]
         
         # Soft limit warning untuk batch besar
-        if len(new_files) > 20:
+        if len(new_files) > 10:
+            st.error(f"""
+            🚨 **BATCH TERLALU BESAR - HIGH RISK CRASH!**
+            
+            Anda upload **{len(new_files)} file**. 
+            
+            **⚠️ STREAMLIT CLOUD FREE TIER LIMIT:**
+            - RAM: 512MB (sangat terbatas!)
+            - **Recommended: 5-8 file** per batch
+            - **Maximum safe: 10 file**
+            
+            **🎯 SOLUSI:**
+            
+            **Opsi 1 (Recommended):** Bagi jadi batch kecil
+            - Batch 1: {min(8, len(new_files))} files
+            - Batch 2: {max(0, len(new_files) - 8)} files
+            
+            **Opsi 2:** Proses semua sekarang (RESIKO TINGGI!)
+            - Ada kemungkinan **crash** di tengah proses
+            - Data yang sudah ter-process akan hilang
+            - Harus refresh & upload ulang
+            
+            💡 **Best practice:** Cancel upload ini, upload ulang 5-8 files saja!
+            """, icon="🚨")
+        
+        elif len(new_files) > 5:
             st.warning(f"""
-            ⚠️ **Batch terlalu besar!**
+            ⚠️ **Batch sedang-besar**
             
-            Anda upload **{len(new_files)} file**. Untuk stabilitas optimal:
-            - **Recommended: 10-15 file** per batch
-            - File >2MB: Max 5-10 per batch
+            Upload {len(new_files)} file. Recommended: 5-8 file per batch.
             
-            💡 **Saran:** 
-            - Proses batch ini dulu
-            - Setelah selesai, upload batch berikutnya
-            
-            Sistem akan tetap proses semua, tapi ada **resiko crash** untuk batch besar.
+            Proses akan berjalan lebih lambat (~1 detik per file) untuk stabilitas.
             """, icon="⚠️")
         
         if new_files:
@@ -1128,14 +1238,21 @@ with button_placeholder:
                         # Update progress
                         bar.progress((i + 1) / len(new_files))
                         
-                        # DELAY untuk avoid memory spike (khusus cloud)
+                        # AGGRESSIVE DELAY & CLEANUP untuk avoid memory spike
                         # Skip delay untuk file terakhir
                         if i < len(new_files) - 1:
                             import time
-                            time.sleep(0.5)  # 500ms delay antar file
+                            import gc
                             
-                            # Force cleanup lagi
+                            # Longer delay untuk stabilitas
+                            time.sleep(1.0)  # 1 second delay (was 0.5s)
+                            
+                            # Force aggressive cleanup
                             gc.collect()
+                            gc.collect()  # Double cleanup
+                            
+                            # Small pause untuk system breathing
+                            time.sleep(0.2)
                     
                     # Clear progress indicators
                     bar.empty()
