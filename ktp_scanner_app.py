@@ -803,11 +803,14 @@ st.sidebar.info("""
 """, icon="ℹ️")
 
 st.sidebar.warning("""
-**⚠️ Batasan Sistem Cloud:**
-- Maksimal 5 KTP per sesi
-- Ukuran foto: < 2MB per file
-- Jika terjadi error, refresh halaman
-- Gunakan koneksi internet stabil
+**⚠️ Tips Optimal Processing:**
+- Sistem proses 1 file per saat
+- Delay 0.5 detik antar file (avoid crash)
+- Max recommended: 10-15 file per batch
+- File besar (>2MB): max 5-10 per batch
+- Jika crash: coba batch lebih kecil
+
+💡 **Untuk banyak file:** Upload multiple batch!
 """, icon="⚠️")
 
 st.sidebar.markdown("---")
@@ -877,10 +880,10 @@ show_kampus_field = st.sidebar.checkbox(
 st.session_state.show_kampus_field = show_kampus_field
 
 uploaded_files = st.file_uploader(
-    "📤 Upload Foto KTP Nasabah (Maksimal 5 foto)", 
+    "📤 Upload Foto KTP Nasabah", 
     type=['jpg','png','jpeg'], 
     accept_multiple_files=True,
-    help="Format: JPG, PNG, JPEG | Ukuran maks: 2MB per file"
+    help="💡 Recommended: 10-15 file per batch | File >2MB: 5-10 per batch"
 )
 
 button_placeholder = st.container()
@@ -1035,9 +1038,21 @@ with button_placeholder:
     if uploaded_files:
         new_files = [f for f in uploaded_files if f.name not in st.session_state.processed_files]
         
-        if len(new_files) > 5:
-            st.warning("⚠️ Batasan sistem: Maksimal 5 KTP per sesi pemindaian. Silakan upload ulang dalam jumlah lebih kecil.", icon="⚠️")
-            new_files = new_files[:5]
+        # Soft limit warning untuk batch besar
+        if len(new_files) > 20:
+            st.warning(f"""
+            ⚠️ **Batch terlalu besar!**
+            
+            Anda upload **{len(new_files)} file**. Untuk stabilitas optimal:
+            - **Recommended: 10-15 file** per batch
+            - File >2MB: Max 5-10 per batch
+            
+            💡 **Saran:** 
+            - Proses batch ini dulu
+            - Setelah selesai, upload batch berikutnya
+            
+            Sistem akan tetap proses semua, tapi ada **resiko crash** untuk batch besar.
+            """, icon="⚠️")
         
         if new_files:
             if st.button("🚀 MULAI PEMINDAIAN", type="primary", use_container_width=True):
@@ -1049,10 +1064,26 @@ with button_placeholder:
                     with status_placeholder:
                         bar = st.progress(0)
                         txt = st.empty()
+                        status_detail = st.empty()
                     
+                    # Track success & errors
+                    success_list = []
+                    error_list = []
+                    
+                    # Process satu-satu dengan delay untuk avoid memory spike
                     for i, file_item in enumerate(new_files):
-                        txt.info(f"⏳ Memproses: {file_item.name} ({i+1}/{len(new_files)})...")
+                        # Update progress
+                        progress_pct = (i / len(new_files))
+                        bar.progress(progress_pct)
                         
+                        txt.info(f"⏳ Memproses {i+1}/{len(new_files)}: **{file_item.name}**")
+                        status_detail.caption(f"🔄 Queue: {len(new_files) - i - 1} file menunggu...")
+                        
+                        # IMPORTANT: Force garbage collection sebelum process
+                        import gc
+                        gc.collect()
+                        
+                        # Process file
                         res = worker_process(file_item, preview_width, reader)
                         
                         if res and not res.get("error"):
@@ -1075,38 +1106,70 @@ with button_placeholder:
                                 "KAMPUS": ""
                             })
                             st.session_state.processed_files.add(res["FILENAME"])
+                            success_list.append(file_item.name)
                             
-                            # Show success with quality info
-                            if res.get("ROTATION_INFO"):
-                                txt.success(f"✅ {file_item.name}: {res['ROTATION_INFO']}")
+                            # Show success
+                            txt.success(f"✅ {file_item.name}: {res.get('ROTATION_INFO', 'OK')}")
                         
                         elif res and res.get("error"):
-                            # ERROR - Show message but continue
-                            txt.error(res.get("message", f"❌ {file_item.name} gagal diproses"))
+                            # ERROR
+                            error_list.append((file_item.name, res.get("message", "Unknown error")))
+                            txt.error(res.get("message", f"❌ {file_item.name} gagal"))
                         
                         else:
-                            # NULL response
+                            # NULL
+                            error_list.append((file_item.name, "Tidak bisa diproses"))
                             txt.warning(f"⚠️ {file_item.name} tidak bisa diproses")
                         
+                        # Update progress
                         bar.progress((i + 1) / len(new_files))
+                        
+                        # DELAY untuk avoid memory spike (khusus cloud)
+                        # Skip delay untuk file terakhir
+                        if i < len(new_files) - 1:
+                            import time
+                            time.sleep(0.5)  # 500ms delay antar file
+                            
+                            # Force cleanup lagi
+                            gc.collect()
                     
+                    # Clear progress indicators
+                    bar.empty()
+                    txt.empty()
+                    status_detail.empty()
+                    
+                    # Show final summary
                     st.toast("✅ Pemindaian Selesai!", icon="✅")
                     
-                    # Summary Report
-                    total_files = len(new_files)
-                    success_count = len([r for r in st.session_state.data_db if r.get("KTP_ID") and r["KTP_ID"].split("_")[1].isdigit()])
+                    with status_placeholder:
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.success(f"""
+                            **✅ Berhasil: {len(success_list)} file**
+                            {chr(10).join([f"• {name}" for name in success_list[:5]])}
+                            {f"• ... dan {len(success_list) - 5} lagi" if len(success_list) > 5 else ""}
+                            """)
+                        
+                        with col2:
+                            if error_list:
+                                st.error(f"""
+                                **❌ Gagal: {len(error_list)} file**
+                                {chr(10).join([f"• {name}" for name, _ in error_list[:3]])}
+                                {f"• ... dan {len(error_list) - 3} lagi" if len(error_list) > 3 else ""}
+                                """)
+                        
+                        if error_list:
+                            with st.expander("🔍 Detail Error"):
+                                for name, msg in error_list:
+                                    st.write(f"**{name}:**")
+                                    st.caption(msg)
+                                    st.divider()
                     
-                    st.success(f"""
-                    **📊 Hasil Pemindaian:**
-                    - Total file: {total_files}
-                    - Berhasil: {success_count} KTP
-                    - Gagal: {total_files - success_count} file
+                    # Final cleanup
+                    import gc
+                    gc.collect()
                     
-                    {'✅ Semua berhasil!' if success_count == total_files else '⚠️ Ada file yang gagal. Cek error message di atas.'}
-                    """)
-                    
-                    txt.empty()
-                    bar.empty()
                     st.rerun()
 
 # Preview & Download
