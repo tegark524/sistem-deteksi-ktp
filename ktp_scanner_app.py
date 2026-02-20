@@ -245,51 +245,58 @@ def save_to_gsheet(wrong_name, correct_name):
 def check_image_quality(image):
     """
     Validasi kualitas foto KTP sebelum OCR
-    Returns: (is_valid, message)
+    Returns: (is_valid, message, warnings)
     """
     try:
         h, w = image.shape[:2]
+        warnings = []
         
-        # 1. Cek resolusi minimal
-        if w < 300 or h < 200:
-            return False, "❌ Resolusi terlalu kecil. Min: 300x200 px"
+        # 1. Cek resolusi minimal (lebih toleran)
+        if w < 200 or h < 150:
+            return False, f"❌ Resolusi terlalu kecil ({w}x{h}). Min: 200x150 px", warnings
         
-        # 2. Cek aspect ratio (KTP = landscape, ~1.5:1)
+        if w < 400 or h < 250:
+            warnings.append(f"⚠️ Resolusi rendah ({w}x{h}), hasil OCR mungkin kurang akurat")
+        
+        # 2. Cek aspect ratio (lebih toleran)
         aspect_ratio = w / h if h > 0 else 0
-        if aspect_ratio < 1.2 or aspect_ratio > 2.0:
-            return False, f"❌ Rasio foto aneh ({aspect_ratio:.2f}:1). KTP harus landscape ~1.5:1"
+        if aspect_ratio < 0.8 or aspect_ratio > 2.5:
+            return False, f"❌ Rasio foto aneh ({aspect_ratio:.2f}:1). KTP harus landscape", warnings
         
-        # 3. Cek blur/focus (Laplacian variance)
+        # 3. Cek blur/focus (lebih toleran)
         gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
         laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
         
-        if laplacian_var < 100:
-            return False, f"❌ Foto terlalu blur (focus score: {laplacian_var:.0f}). Min: 100"
+        if laplacian_var < 50:
+            return False, f"❌ Foto terlalu blur (score: {laplacian_var:.0f}). Min: 50", warnings
         
-        # 4. Cek brightness (jangan terlalu gelap/terang)
+        if laplacian_var < 100:
+            warnings.append(f"⚠️ Foto agak blur (score: {laplacian_var:.0f})")
+        
+        # 4. Cek brightness (lebih toleran)
         mean_brightness = np.mean(gray)
         
-        if mean_brightness < 50:
-            return False, f"❌ Foto terlalu gelap (brightness: {mean_brightness:.0f}). Min: 50"
+        if mean_brightness < 30:
+            return False, f"❌ Foto terlalu gelap ({mean_brightness:.0f}). Min: 30", warnings
         
-        if mean_brightness > 220:
-            return False, f"❌ Foto terlalu terang/overexposed (brightness: {mean_brightness:.0f}). Max: 220"
+        if mean_brightness > 240:
+            return False, f"❌ Foto terlalu terang ({mean_brightness:.0f}). Max: 240", warnings
         
-        # 5. Cek apakah ada multiple cards (detect multiple rectangles)
-        edges = cv2.Canny(gray, 50, 150)
-        contours, _ = cv2.findContours(edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if mean_brightness < 60:
+            warnings.append(f"⚠️ Foto agak gelap ({mean_brightness:.0f})")
         
-        large_contours = [c for c in contours if cv2.contourArea(c) > (w * h * 0.1)]
+        if mean_brightness > 200:
+            warnings.append(f"⚠️ Foto agak terang ({mean_brightness:.0f})")
         
-        if len(large_contours) > 2:
-            return False, "❌ Terdeteksi multiple KTP dalam 1 foto. Upload 1 KTP per foto!"
+        # 5. Skip multi-card detection (terlalu strict, sering false positive)
         
         # All checks passed
-        return True, f"✅ Kualitas OK (focus: {laplacian_var:.0f}, brightness: {mean_brightness:.0f})"
+        quality_score = f"OK (focus: {laplacian_var:.0f}, brightness: {mean_brightness:.0f})"
+        return True, quality_score, warnings
         
     except Exception as e:
-        # Jika validasi error, tetap lanjut (better than blocking)
-        return True, "⚠️ Validasi skip"
+        # Jika validasi error, tetap lanjut
+        return True, "⚠️ Validasi skip", []
 
 # --- FUNGSI AUTO-ROTATE KTP ---
 def auto_rotate_ktp(image):
@@ -555,10 +562,9 @@ def extract_nama(text_list):
                 break  # Ambil 1 nama pertama setelah label "Nama"
     
     # DETEKSI MULTIPLE NAMES (foto kemungkinan multiple KTP!)
-    if len(potential_names) > 1:
-        # Ini kemungkinan multiple KTP dalam 1 foto!
-        # Return empty untuk trigger error
-        return ""
+    # Jangan langsung reject, bisa jadi false positive
+    # if len(potential_names) > 1:
+    #     return ""
     
     if potential_names:
         return potential_names[0]
@@ -594,10 +600,10 @@ def extract_nama(text_list):
         
         valid_candidates.append(cleaned)
     
-    # DETEKSI MULTIPLE VALID CANDIDATES (kemungkinan multiple KTP)
-    if len(valid_candidates) > 2:
-        # Terlalu banyak nama detected = multiple KTP!
-        return ""
+    # DETEKSI MULTIPLE VALID CANDIDATES
+    # Jangan terlalu strict, bisa false positive
+    # if len(valid_candidates) > 2:
+    #     return ""
     
     # Ambil yang terpanjang dari candidates
     if valid_candidates:
@@ -624,7 +630,7 @@ def worker_process(file_item, thumbnail_size, reader):
             }
         
         # VALIDASI KUALITAS FOTO (CRITICAL!)
-        is_valid, quality_msg = check_image_quality(img)
+        is_valid, quality_msg, warnings = check_image_quality(img)
         
         if not is_valid:
             return {
@@ -717,10 +723,12 @@ def worker_process(file_item, thumbnail_size, reader):
         img_buffer.seek(0)
         
         rotation_info = quality_msg
+        if warnings:
+            rotation_info += " | " + " | ".join(warnings)
         if orientation_angle != 0:
-            rotation_info += f" (rotated {orientation_angle}°)"
+            rotation_info += f" | Rotated {orientation_angle}°"
         if rotation_angle != 0:
-            rotation_info += f" (adjusted {rotation_angle:.1f}°)"
+            rotation_info += f" | Adjusted {rotation_angle:.1f}°"
         
         return {
             "error": False,
@@ -1098,7 +1106,21 @@ with button_placeholder:
                         
                         bar.progress((i + 1) / len(new_files))
                     
-                    st.toast("✅ Pemindaian KTP Berhasil!", icon="✅")
+                    st.toast("✅ Pemindaian Selesai!", icon="✅")
+                    
+                    # Summary Report
+                    total_files = len(new_files)
+                    success_count = len([r for r in st.session_state.data_db if r.get("KTP_ID") and r["KTP_ID"].split("_")[1].isdigit()])
+                    
+                    st.success(f"""
+                    **📊 Hasil Pemindaian:**
+                    - Total file: {total_files}
+                    - Berhasil: {success_count} KTP
+                    - Gagal: {total_files - success_count} file
+                    
+                    {'✅ Semua berhasil!' if success_count == total_files else '⚠️ Ada file yang gagal. Cek error message di atas.'}
+                    """)
+                    
                     txt.empty()
                     bar.empty()
                     st.rerun()
