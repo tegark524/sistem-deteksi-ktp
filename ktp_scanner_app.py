@@ -298,6 +298,69 @@ def check_image_quality(image):
         # Jika validasi error, tetap lanjut
         return True, "⚠️ Validasi skip", []
 
+# --- FUNGSI CROP KTP DARI SCREENSHOT ---
+def detect_and_crop_ktp(image):
+    """
+    Deteksi area KTP dalam screenshot/dokumen dan crop
+    Returns: cropped KTP image atau original jika tidak detect
+    """
+    try:
+        h, w = image.shape[:2]
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        
+        # Edge detection
+        edges = cv2.Canny(gray, 50, 150, apertureSize=3)
+        
+        # Dilate untuk connect edges
+        kernel = np.ones((5,5), np.uint8)
+        dilated = cv2.dilate(edges, kernel, iterations=2)
+        
+        # Find contours
+        contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        
+        # Cari contour yang ukurannya mirip KTP
+        ktp_candidates = []
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            
+            # KTP minimal 20% dari total area, max 80%
+            if area < (w * h * 0.2) or area > (w * h * 0.8):
+                continue
+            
+            # Get bounding box
+            x, y, cw, ch = cv2.boundingRect(contour)
+            
+            # Aspect ratio KTP ~ 1.5-1.6
+            aspect = cw / ch if ch > 0 else 0
+            if aspect < 1.3 or aspect > 1.8:
+                continue
+            
+            ktp_candidates.append((area, x, y, cw, ch))
+        
+        # Ambil candidate terbesar
+        if ktp_candidates:
+            ktp_candidates.sort(reverse=True, key=lambda x: x[0])
+            _, x, y, cw, ch = ktp_candidates[0]
+            
+            # Crop dengan margin
+            margin = 10
+            x1 = max(0, x - margin)
+            y1 = max(0, y - margin)
+            x2 = min(w, x + cw + margin)
+            y2 = min(h, y + ch + margin)
+            
+            cropped = image[y1:y2, x1:x2]
+            
+            # Validasi crop tidak terlalu kecil
+            if cropped.shape[0] > 100 and cropped.shape[1] > 100:
+                return cropped, True
+        
+        # Jika tidak detect, return original
+        return image, False
+        
+    except Exception as e:
+        return image, False
+
 # --- FUNGSI AUTO-ROTATE KTP ---
 def auto_rotate_ktp(image):
     """
@@ -570,6 +633,9 @@ def worker_process(file_item, thumbnail_size, reader):
                 "FILENAME": file_item.name
             }
         
+        # STEP 0: Detect & Crop KTP dari screenshot (jika ada text/form di sekitar KTP)
+        img, was_cropped = detect_and_crop_ktp(img)
+        
         # VALIDASI KUALITAS FOTO (CRITICAL!)
         is_valid, quality_msg, warnings = check_image_quality(img)
         
@@ -639,6 +705,8 @@ def worker_process(file_item, thumbnail_size, reader):
         img_buffer.seek(0)
         
         rotation_info = quality_msg
+        if was_cropped:
+            rotation_info += " | Auto-cropped dari screenshot"
         if warnings:
             rotation_info += " | " + " | ".join(warnings)
         if orientation_angle != 0:
