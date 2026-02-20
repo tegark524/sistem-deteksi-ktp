@@ -758,38 +758,34 @@ def worker_process(file_item, thumbnail_size, reader):
         import gc
         gc.collect()
         
-        # VALIDASI HASIL OCR
+        # VALIDASI HASIL OCR - Tetap simpan foto walaupun gagal!
+        has_error = False
+        error_detail = ""
+        
         if not extracted_name and not extracted_nik:
-            return {
-                "error": True,
-                "message": f"{file_item.name}: ❌ GAGAL! Kemungkinan:\n• Multiple KTP dalam 1 foto\n• Foto blur/gelap\n• Screenshot dari PDF/WA\n\n💡 Upload 1 KTP per foto dengan kamera langsung!",
-                "FILENAME": file_item.name
-            }
+            has_error = True
+            error_detail = "Nama & NIK tidak terdeteksi"
+        elif not extracted_name:
+            has_error = True
+            error_detail = "Nama tidak terdeteksi"
+        elif not extracted_nik:
+            has_error = True  
+            error_detail = "NIK tidak terdeteksi"
         
-        if not extracted_name:
-            return {
-                "error": True,
-                "message": f"{file_item.name}: ❌ Nama tidak terdeteksi. Kemungkinan multiple KTP atau foto tidak fokus. Coba foto ulang 1 KTP saja!",
-                "FILENAME": file_item.name
-            }
-        
-        if not extracted_nik:
-            return {
-                "error": True,
-                "message": f"{file_item.name}: ❌ NIK tidak terdeteksi. Pastikan bagian NIK jelas & tidak tertutup bayangan!",
-                "FILENAME": file_item.name
-            }
-        
-        # STEP 7: Simpan preview - OPTIMIZED SIZE
-        # Baca ulang dari file bytes (lebih hemat memory)
+        # STEP 7: Simpan preview - ORIGINAL QUALITY (tidak compress)
+        # Baca ulang dari file bytes untuk quality terbaik
         preview_img = Image.open(io.BytesIO(f_bytes))
         
-        # Thumbnail size adaptive
-        thumb_size = min(thumbnail_size, 400)  # Max 400px untuk save memory
-        preview_img.thumbnail((thumb_size, thumb_size), Image.LANCZOS)
+        # Resize proporsional ke lebar target (maintain quality)
+        w_prev, h_prev = preview_img.size
+        if w_prev > thumbnail_size:
+            ratio = thumbnail_size / w_prev
+            new_h = int(h_prev * ratio)
+            preview_img = preview_img.resize((thumbnail_size, new_h), Image.LANCZOS)
         
         img_buffer = io.BytesIO()
-        preview_img.save(img_buffer, format='JPEG', quality=75, optimize=True)  # Lower quality
+        # High quality JPEG - tidak terlalu compress
+        preview_img.save(img_buffer, format='JPEG', quality=95, optimize=False)
         img_buffer.seek(0)
         
         # Clear preview
@@ -806,11 +802,13 @@ def worker_process(file_item, thumbnail_size, reader):
         if rotation_angle != 0:
             rotation_info += f" | Adjusted {rotation_angle:.1f}°"
         
+        # Return data dengan flag error (tapi tetap ada foto!)
         return {
-            "error": False,
+            "error": has_error,
+            "error_detail": error_detail if has_error else None,
             "IMAGE_DATA": img_buffer.getvalue(),
-            "NAMA": extracted_name,
-            "NOMORIDENTITAS": extracted_nik,
+            "NAMA": extracted_name or "",
+            "NOMORIDENTITAS": extracted_nik or "",
             "FILENAME": file_item.name,
             "ROTATION_INFO": rotation_info
         }
@@ -939,8 +937,6 @@ if 'data_db' not in st.session_state:
     st.session_state.data_db = []
 if 'processed_files' not in st.session_state:
     st.session_state.processed_files = set()
-if 'show_kampus_field' not in st.session_state:
-    st.session_state.show_kampus_field = False
 
 # Load learned fixes dari Google Sheets (AUTO-SYNC!)
 if 'learned_fixes' not in st.session_state:
@@ -963,16 +959,6 @@ if st.session_state.learned_fixes:
             st.write(f"{idx}. `{wrong}` → `{right}`")
 else:
     st.sidebar.info("💡 Belum ada pembelajaran.\n\nSistem akan otomatis belajar saat admin mengoreksi nama OCR.", icon="🎓")
-
-st.sidebar.markdown("---")
-st.sidebar.markdown("**📚 Opsi Tambahan**")
-
-show_kampus_field = st.sidebar.checkbox(
-    "🎓 Tampilkan Field Kampus",
-    value=st.session_state.show_kampus_field,
-    help="Aktifkan untuk nasabah mahasiswa/pelajar"
-)
-st.session_state.show_kampus_field = show_kampus_field
 
 uploaded_files = st.file_uploader(
     "📤 Upload Foto KTP Nasabah", 
@@ -1105,22 +1091,10 @@ if st.session_state.data_db:
                         value=row.get("EMAIL", ""),
                         key=f"email_{idx}",
                         placeholder="email@example.com",
-                        help="Field terakhir" if not show_kampus_field else "Tab untuk pindah ke Kampus"
+                        help="Field terakhir"
                     )
                     if new_email != row.get("EMAIL", ""):
                         st.session_state.data_db[idx]["EMAIL"] = new_email
-                    
-                    if show_kampus_field:
-                        label_kampus = "7️⃣ Kampus/Universitas" if show_field_numbers else "Kampus/Universitas"
-                        new_kampus = st.text_input(
-                            label_kampus,
-                            value=row.get("KAMPUS", ""),
-                            key=f"kampus_{idx}",
-                            placeholder="Contoh: Universitas Airlangga",
-                            help="Nama kampus untuk nasabah mahasiswa"
-                        )
-                        if new_kampus != row.get("KAMPUS", ""):
-                            st.session_state.data_db[idx]["KAMPUS"] = new_kampus
                     
                     if new_nama and new_nik:
                         st.success("✅ Data lengkap tersimpan otomatis")
@@ -1200,38 +1174,44 @@ with button_placeholder:
                         # Process file
                         res = worker_process(file_item, preview_width, reader)
                         
-                        if res and not res.get("error"):
-                            # SUCCESS - Add to database
+                        if res and res.get("IMAGE_DATA"):
+                            # Ada foto - SELALU SIMPAN (walaupun error OCR)
                             ktp_id = f"ktp_{len(st.session_state.data_db)}_{res['FILENAME']}"
-                            st.session_state.original_ocr_results[ktp_id] = {
-                                "NAMA": res["NAMA"],
-                                "NOMORIDENTITAS": res["NOMORIDENTITAS"]
-                            }
+                            
+                            if res.get("NAMA") or res.get("NOMORIDENTITAS"):
+                                # Ada data OCR yang berhasil
+                                st.session_state.original_ocr_results[ktp_id] = {
+                                    "NAMA": res.get("NAMA", ""),
+                                    "NOMORIDENTITAS": res.get("NOMORIDENTITAS", "")
+                                }
                             
                             st.session_state.data_db.append({
                                 "KTP_ID": ktp_id,
                                 "IMAGE_DATA": res["IMAGE_DATA"],
-                                "NAMA": res["NAMA"],
-                                "NOMORIDENTITAS": res["NOMORIDENTITAS"],
+                                "NAMA": res.get("NAMA", ""),
+                                "NOMORIDENTITAS": res.get("NOMORIDENTITAS", ""),
                                 "NAMA GADIS IBU": "",
                                 "CIF NO": "",
                                 "NO HP": "",
-                                "EMAIL": "",
-                                "KAMPUS": ""
+                                "EMAIL": ""
                             })
                             st.session_state.processed_files.add(res["FILENAME"])
-                            success_list.append(file_item.name)
                             
-                            # Show success
-                            txt.success(f"✅ {file_item.name}: {res.get('ROTATION_INFO', 'OK')}")
+                            # Show status
+                            if res.get("error"):
+                                error_list.append((file_item.name, res.get("error_detail", "Unknown error")))
+                                txt.warning(f"⚠️ {file_item.name}: {res.get('error_detail')} | Foto tersimpan, silakan isi manual")
+                            else:
+                                success_list.append(file_item.name)
+                                txt.success(f"✅ {file_item.name}: {res.get('ROTATION_INFO', 'OK')}")
                         
-                        elif res and res.get("error"):
-                            # ERROR
-                            error_list.append((file_item.name, res.get("message", "Unknown error")))
-                            txt.error(res.get("message", f"❌ {file_item.name} gagal"))
+                        elif res and res.get("error") and not res.get("IMAGE_DATA"):
+                            # Error fatal (gambar tidak bisa di-decode, dll)
+                            error_list.append((file_item.name, res.get("message", "Fatal error")))
+                            txt.error(res.get("message", f"❌ {file_item.name} gagal total"))
                         
                         else:
-                            # NULL
+                            # NULL response
                             error_list.append((file_item.name, "Tidak bisa diproses"))
                             txt.warning(f"⚠️ {file_item.name} tidak bisa diproses")
                         
@@ -1309,8 +1289,7 @@ if st.session_state.data_db:
             "NAMA GADIS IBU": row.get("NAMA GADIS IBU", ""),
             "CIF NO": row.get("CIF NO", ""),
             "NO HP": row.get("NO HP", ""),
-            "EMAIL": row.get("EMAIL", ""),
-            "KAMPUS": row.get("KAMPUS", "")
+            "EMAIL": row.get("EMAIL", "")
         })
     
     df_display = pd.DataFrame(df_preview)
@@ -1327,7 +1306,6 @@ if st.session_state.data_db:
             "CIF NO": st.column_config.TextColumn("CIF No", width="small"),
             "NO HP": st.column_config.TextColumn("No HP", width="medium"),
             "EMAIL": st.column_config.TextColumn("Email", width="large"),
-            "KAMPUS": st.column_config.TextColumn("Kampus", width="large"),
         }
     )
     
@@ -1345,8 +1323,7 @@ if st.session_state.data_db:
                 "NAMA GADIS IBU": row.get("NAMA GADIS IBU", ""),
                 "CIF NO": row.get("CIF NO", ""),
                 "NO HP": row.get("NO HP", ""),
-                "EMAIL": row.get("EMAIL", ""),
-                "KAMPUS": row.get("KAMPUS", "")
+                "EMAIL": row.get("EMAIL", "")
             })
         df_dl = pd.DataFrame(df_export)
         buffer = io.BytesIO()
