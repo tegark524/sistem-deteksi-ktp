@@ -910,20 +910,28 @@ st.sidebar.markdown("---")
 st.sidebar.markdown("**🎨 Kustomisasi Tampilan**")
 
 preview_width = st.sidebar.slider(
-    "📏 Ukuran Preview KTP",
+    "📏 Resolusi Preview",
     min_value=300,
     max_value=700,
     value=500,
     step=50,
-    help="Sesuaikan ukuran tampilan foto KTP"
+    help="Resolusi foto preview (tidak affect ratio foto vs form)"
 )
 
+st.sidebar.info("""
+**💡 Layout Side-by-Side:**
+- Foto: 33% (kiri)
+- Form: 67% (kanan) ⭐
+
+Form lebih lebar untuk input lebih nyaman!
+""", icon="ℹ️")
+
 cards_per_row = st.sidebar.radio(
-    "📐 Layout Tampilan",
+    "📐 Cards Per Baris",
     options=[1, 2],
     index=0,
-    help="Pilih jumlah kartu per baris",
-    format_func=lambda x: f"1 Kartu (Lebar Penuh)" if x == 1 else f"2 Kartu (Berdampingan)"
+    help="1 card (Recommended) = Full width | 2 cards = Compact",
+    format_func=lambda x: f"1 Kartu ⭐ (Full width)" if x == 1 else f"2 Kartu (Compact)"
 )
 
 show_field_numbers = st.sidebar.checkbox(
@@ -1002,104 +1010,114 @@ if st.session_state.data_db:
                             st.session_state.data_db.pop(idx)
                             st.rerun()
                     
-                    if row.get("IMAGE_DATA"):
-                        st.image(row["IMAGE_DATA"], width=preview_width, use_container_width=False)
-                    
                     st.divider()
-                    st.markdown("**📝 Informasi Identitas**")
                     
-                    label_nama = "1️⃣ Nama Lengkap" if show_field_numbers else "Nama Lengkap"
-                    new_nama = st.text_input(
-                        label_nama,
-                        value=row["NAMA"],
-                        key=f"nama_{idx}",
-                        placeholder="Masukkan nama lengkap",
-                        help="Tab untuk pindah ke NIK"
-                    )
+                    # LAYOUT: Foto di kiri (lebih kecil), Form di kanan (lebih lebar)
+                    # Ratio disesuaikan agar form punya space lebih untuk input
+                    col_foto, col_form = st.columns([1, 2])  # 1:2 ratio
                     
-                    # AUTO-SAVE ke Google Sheets saat ada perubahan
-                    if new_nama != row["NAMA"] and row.get("KTP_ID"):
-                        ktp_id = row["KTP_ID"]
-                        if ktp_id in st.session_state.original_ocr_results:
-                            original_nama = st.session_state.original_ocr_results[ktp_id]["NAMA"]
-                            
-                            if new_nama and original_nama and new_nama != original_nama:
-                                # Update session state
-                                st.session_state.learned_fixes[original_nama] = new_nama
-                                
-                                # AUTO-SAVE ke Google Sheets
-                                if save_to_gsheet(original_nama, new_nama):
-                                    st.success(f"🧠 Auto-saved: `{original_nama}` → `{new_nama}`", icon="✅")
-                                else:
-                                    st.info(f"💾 Saved locally: `{original_nama}` → `{new_nama}`", icon="ℹ️")
+                    with col_foto:
+                        st.markdown("**📸 Preview KTP**")
+                        if row.get("IMAGE_DATA"):
+                            st.image(row["IMAGE_DATA"], use_container_width=True)
+                        else:
+                            st.warning("Foto tidak tersedia")
+                    
+                    with col_form:
+                        st.markdown("**📝 Informasi Identitas**")
                         
-                        st.session_state.data_db[idx]["NAMA"] = new_nama
-                    
-                    label_nik = "2️⃣ NIK (16 digit)" if show_field_numbers else "NIK (16 digit)"
-                    new_nik = st.text_input(
-                        label_nik,
-                        value=row["NOMORIDENTITAS"],
-                        key=f"nik_{idx}",
-                        placeholder="3516XXXXXXXXXXXX",
-                        max_chars=16,
-                        help="Tab untuk pindah ke Nama Ibu"
-                    )
-                    if new_nik != row["NOMORIDENTITAS"]:
-                        st.session_state.data_db[idx]["NOMORIDENTITAS"] = new_nik
-                    
-                    st.markdown("**ℹ️ Data Pelengkap Nasabah**")
-                    
-                    label_ibu = "3️⃣ Nama Gadis Ibu" if show_field_numbers else "Nama Gadis Ibu"
-                    new_ibu = st.text_input(
-                        label_ibu,
-                        value=row.get("NAMA GADIS IBU", ""),
-                        key=f"ibu_{idx}",
-                        placeholder="Nama gadis ibu kandung",
-                        help="Tab untuk pindah ke CIF"
-                    )
-                    if new_ibu != row.get("NAMA GADIS IBU", ""):
-                        st.session_state.data_db[idx]["NAMA GADIS IBU"] = new_ibu
-                    
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        label_cif = "4️⃣ CIF No" if show_field_numbers else "CIF No"
-                        new_cif = st.text_input(
-                            label_cif,
-                            value=row.get("CIF NO", ""),
-                            key=f"cif_{idx}",
-                            placeholder="CIF",
-                            help="Tab untuk pindah ke No HP"
+                        label_nama = "1️⃣ Nama Lengkap" if show_field_numbers else "Nama Lengkap"
+                        new_nama = st.text_input(
+                            label_nama,
+                            value=row["NAMA"],
+                            key=f"nama_{idx}",
+                            placeholder="Masukkan nama lengkap",
+                            help="Tab untuk pindah ke NIK"
                         )
-                        if new_cif != row.get("CIF NO", ""):
-                            st.session_state.data_db[idx]["CIF NO"] = new_cif
-                    
-                    with col2:
-                        label_hp = "5️⃣ No HP" if show_field_numbers else "No HP"
-                        new_hp = st.text_input(
-                            label_hp,
-                            value=row.get("NO HP", ""),
-                            key=f"hp_{idx}",
-                            placeholder="08XXXXXXXXXX",
-                            help="Tab untuk pindah ke Email"
+                        
+                        # AUTO-SAVE ke Google Sheets saat ada perubahan
+                        if new_nama != row["NAMA"] and row.get("KTP_ID"):
+                            ktp_id = row["KTP_ID"]
+                            if ktp_id in st.session_state.original_ocr_results:
+                                original_nama = st.session_state.original_ocr_results[ktp_id]["NAMA"]
+                                
+                                if new_nama and original_nama and new_nama != original_nama:
+                                    # Update session state
+                                    st.session_state.learned_fixes[original_nama] = new_nama
+                                    
+                                    # AUTO-SAVE ke Google Sheets
+                                    if save_to_gsheet(original_nama, new_nama):
+                                        st.success(f"🧠 Auto-saved: `{original_nama}` → `{new_nama}`", icon="✅")
+                                    else:
+                                        st.info(f"💾 Saved locally: `{original_nama}` → `{new_nama}`", icon="ℹ️")
+                            
+                            st.session_state.data_db[idx]["NAMA"] = new_nama
+                        
+                        label_nik = "2️⃣ NIK (16 digit)" if show_field_numbers else "NIK (16 digit)"
+                        new_nik = st.text_input(
+                            label_nik,
+                            value=row["NOMORIDENTITAS"],
+                            key=f"nik_{idx}",
+                            placeholder="3516XXXXXXXXXXXX",
+                            max_chars=16,
+                            help="Tab untuk pindah ke Nama Ibu"
                         )
-                        if new_hp != row.get("NO HP", ""):
-                            st.session_state.data_db[idx]["NO HP"] = new_hp
-                    
-                    label_email = "6️⃣ Email" if show_field_numbers else "Email"
-                    new_email = st.text_input(
-                        label_email,
-                        value=row.get("EMAIL", ""),
-                        key=f"email_{idx}",
-                        placeholder="email@example.com",
-                        help="Field terakhir"
-                    )
-                    if new_email != row.get("EMAIL", ""):
-                        st.session_state.data_db[idx]["EMAIL"] = new_email
-                    
-                    if new_nama and new_nik:
-                        st.success("✅ Data lengkap tersimpan otomatis")
-                    elif new_nama or new_nik:
-                        st.warning("⚠️ Data belum lengkap")
+                        if new_nik != row["NOMORIDENTITAS"]:
+                            st.session_state.data_db[idx]["NOMORIDENTITAS"] = new_nik
+                        
+                        st.markdown("**ℹ️ Data Pelengkap Nasabah**")
+                        
+                        label_ibu = "3️⃣ Nama Gadis Ibu" if show_field_numbers else "Nama Gadis Ibu"
+                        new_ibu = st.text_input(
+                            label_ibu,
+                            value=row.get("NAMA GADIS IBU", ""),
+                            key=f"ibu_{idx}",
+                            placeholder="Nama gadis ibu kandung",
+                            help="Tab untuk pindah ke CIF"
+                        )
+                        if new_ibu != row.get("NAMA GADIS IBU", ""):
+                            st.session_state.data_db[idx]["NAMA GADIS IBU"] = new_ibu
+                        
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            label_cif = "4️⃣ CIF No" if show_field_numbers else "CIF No"
+                            new_cif = st.text_input(
+                                label_cif,
+                                value=row.get("CIF NO", ""),
+                                key=f"cif_{idx}",
+                                placeholder="CIF",
+                                help="Tab untuk pindah ke No HP"
+                            )
+                            if new_cif != row.get("CIF NO", ""):
+                                st.session_state.data_db[idx]["CIF NO"] = new_cif
+                        
+                        with col2:
+                            label_hp = "5️⃣ No HP" if show_field_numbers else "No HP"
+                            new_hp = st.text_input(
+                                label_hp,
+                                value=row.get("NO HP", ""),
+                                key=f"hp_{idx}",
+                                placeholder="08XXXXXXXXXX",
+                                help="Tab untuk pindah ke Email"
+                            )
+                            if new_hp != row.get("NO HP", ""):
+                                st.session_state.data_db[idx]["NO HP"] = new_hp
+                        
+                        label_email = "6️⃣ Email" if show_field_numbers else "Email"
+                        new_email = st.text_input(
+                            label_email,
+                            value=row.get("EMAIL", ""),
+                            key=f"email_{idx}",
+                            placeholder="email@example.com",
+                            help="Field terakhir"
+                        )
+                        if new_email != row.get("EMAIL", ""):
+                            st.session_state.data_db[idx]["EMAIL"] = new_email
+                        
+                        if new_nama and new_nik:
+                            st.success("✅ Data lengkap tersimpan otomatis")
+                        elif new_nama or new_nik:
+                            st.warning("⚠️ Data belum lengkap")
                     
                     st.markdown("---")
 
