@@ -583,6 +583,94 @@ def extract_nik(text_list):
     
     return ""
 
+def extract_form_data(text_list):
+    """
+    Extract data tambahan dari form text di bawah KTP
+    (nama lengkap, nama ibu kandung, no HP, email)
+    Returns: dict with extracted data
+    """
+    form_data = {
+        "NAMA_FORM": "",
+        "NAMA_IBU": "",
+        "NO_HP": "",
+        "EMAIL": ""
+    }
+    
+    try:
+        for i, text in enumerate(text_list):
+            text_clean = text.strip()
+            text_upper = text_clean.upper()
+            
+            # Extract NAMA LENGKAP dari form
+            if re.search(r'nama\s*lengkap\s*:', text_upper):
+                # Ambil text setelah ":"
+                match = re.search(r'nama\s*lengkap\s*:\s*(.+)', text_clean, re.IGNORECASE)
+                if match:
+                    nama = match.group(1).strip()
+                    # Clean
+                    nama = re.sub(r'[^A-Za-z\s]', '', nama).upper().strip()
+                    if len(nama) > 5:
+                        form_data["NAMA_FORM"] = nama
+                # Atau di baris berikutnya
+                elif i + 1 < len(text_list):
+                    nama = text_list[i + 1].strip()
+                    nama = re.sub(r'[^A-Za-z\s]', '', nama).upper().strip()
+                    if len(nama) > 5:
+                        form_data["NAMA_FORM"] = nama
+            
+            # Extract NAMA IBU KANDUNG
+            if re.search(r'nama\s*ibu\s*kandung|nama\s*gadis\s*ibu', text_upper):
+                match = re.search(r':\s*(.+)', text_clean)
+                if match:
+                    nama_ibu = match.group(1).strip()
+                    nama_ibu = re.sub(r'[^A-Za-z\s]', '', nama_ibu).upper().strip()
+                    if len(nama_ibu) > 3:
+                        form_data["NAMA_IBU"] = nama_ibu
+                elif i + 1 < len(text_list):
+                    nama_ibu = text_list[i + 1].strip()
+                    nama_ibu = re.sub(r'[^A-Za-z\s]', '', nama_ibu).upper().strip()
+                    if len(nama_ibu) > 3:
+                        form_data["NAMA_IBU"] = nama_ibu
+            
+            # Extract NO HP / NO TELP
+            if re.search(r'no\s*\.?\s*hp|no\s*\.?\s*telp|telepon|handphone', text_upper):
+                # Cari nomor HP (08xxx atau 62xxx, 10-15 digit)
+                match = re.search(r':\s*([0-9\s\-\+]+)', text_clean)
+                if match:
+                    hp = re.sub(r'[^0-9]', '', match.group(1))
+                    if 10 <= len(hp) <= 15:
+                        form_data["NO_HP"] = hp
+                # Atau cari di baris yang sama/berikutnya
+                else:
+                    for j in range(i, min(i + 2, len(text_list))):
+                        nums = re.sub(r'[^0-9]', '', text_list[j])
+                        if 10 <= len(nums) <= 15 and (nums.startswith('08') or nums.startswith('62')):
+                            form_data["NO_HP"] = nums
+                            break
+            
+            # Extract EMAIL
+            if re.search(r'email|e-mail|e\s*mail', text_upper):
+                # Cari email pattern
+                match = re.search(r':\s*([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text_clean, re.IGNORECASE)
+                if match:
+                    form_data["EMAIL"] = match.group(1).lower()
+                # Atau cari di baris berikutnya
+                elif i + 1 < len(text_list):
+                    email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text_list[i + 1], re.IGNORECASE)
+                    if email_match:
+                        form_data["EMAIL"] = email_match.group(1).lower()
+            
+            # Cari email pattern di semua text (tanpa label)
+            if not form_data["EMAIL"]:
+                email_match = re.search(r'([a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,})', text_clean, re.IGNORECASE)
+                if email_match:
+                    form_data["EMAIL"] = email_match.group(1).lower()
+        
+        return form_data
+        
+    except Exception as e:
+        return form_data
+
 def extract_nama(text_list):
     """Extract nama dengan filtering sederhana tapi efektif"""
     
@@ -749,9 +837,24 @@ def worker_process(file_item, thumbnail_size, reader):
         del results
         gc.collect()
         
-        # STEP 6: Extract data
+        # STEP 6: Extract data dari KTP
         extracted_name = extract_nama(text_list)
         extracted_nik = extract_nik(text_list)
+        
+        # STEP 6B: Extract data dari FORM TEXT (fallback/supplement)
+        form_data = extract_form_data(text_list)
+        
+        # MERGE DATA: Gunakan form data sebagai fallback atau perbandingan
+        final_name = extracted_name or form_data.get("NAMA_FORM", "")
+        final_nik = extracted_nik
+        final_nama_ibu = form_data.get("NAMA_IBU", "")
+        final_hp = form_data.get("NO_HP", "")
+        final_email = form_data.get("EMAIL", "")
+        
+        # Perbandingan nama (jika ada kedua-duanya)
+        if extracted_name and form_data.get("NAMA_FORM") and extracted_name != form_data["NAMA_FORM"]:
+            # Ada perbedaan - prioritas form (lebih jelas)
+            final_name = form_data["NAMA_FORM"]
         
         # Clear text list
         del text_list
@@ -762,13 +865,13 @@ def worker_process(file_item, thumbnail_size, reader):
         has_error = False
         error_detail = ""
         
-        if not extracted_name and not extracted_nik:
+        if not final_name and not final_nik:
             has_error = True
             error_detail = "Nama & NIK tidak terdeteksi"
-        elif not extracted_name:
+        elif not final_name:
             has_error = True
             error_detail = "Nama tidak terdeteksi"
-        elif not extracted_nik:
+        elif not final_nik:
             has_error = True  
             error_detail = "NIK tidak terdeteksi"
         
@@ -807,8 +910,11 @@ def worker_process(file_item, thumbnail_size, reader):
             "error": has_error,
             "error_detail": error_detail if has_error else None,
             "IMAGE_DATA": img_buffer.getvalue(),
-            "NAMA": extracted_name or "",
-            "NOMORIDENTITAS": extracted_nik or "",
+            "NAMA": final_name,
+            "NOMORIDENTITAS": final_nik,
+            "NAMA_IBU": final_nama_ibu,  # NEW!
+            "NO_HP": final_hp,            # NEW!
+            "EMAIL": final_email,         # NEW!
             "FILENAME": file_item.name,
             "ROTATION_INFO": rotation_info
         }
@@ -1208,10 +1314,10 @@ with button_placeholder:
                                 "IMAGE_DATA": res["IMAGE_DATA"],
                                 "NAMA": res.get("NAMA", ""),
                                 "NOMORIDENTITAS": res.get("NOMORIDENTITAS", ""),
-                                "NAMA GADIS IBU": "",
+                                "NAMA GADIS IBU": res.get("NAMA_IBU", ""),  # Auto-fill dari form!
                                 "CIF NO": "",
-                                "NO HP": "",
-                                "EMAIL": ""
+                                "NO HP": res.get("NO_HP", ""),              # Auto-fill dari form!
+                                "EMAIL": res.get("EMAIL", "")               # Auto-fill dari form!
                             })
                             st.session_state.processed_files.add(res["FILENAME"])
                             
