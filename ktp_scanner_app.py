@@ -1174,12 +1174,13 @@ if st.session_state.data_db:
                         st.markdown("**ℹ️ Data Pelengkap Nasabah**")
                         
                         label_ibu = "3️⃣ Nama Gadis Ibu" if show_field_numbers else "Nama Gadis Ibu"
+                        ibu_value = row.get("NAMA GADIS IBU", "")
                         new_ibu = st.text_input(
-                            label_ibu,
-                            value=row.get("NAMA GADIS IBU", ""),
+                            label_ibu + (" ✨" if ibu_value else ""),  # Indicator jika auto-filled
+                            value=ibu_value,
                             key=f"ibu_{idx}",
                             placeholder="Nama gadis ibu kandung",
-                            help="Tab untuk pindah ke CIF"
+                            help="✨ = Auto-filled dari form text" if ibu_value else "Tab untuk pindah ke CIF"
                         )
                         if new_ibu != row.get("NAMA GADIS IBU", ""):
                             st.session_state.data_db[idx]["NAMA GADIS IBU"] = new_ibu
@@ -1199,29 +1200,36 @@ if st.session_state.data_db:
                         
                         with col2:
                             label_hp = "5️⃣ No HP" if show_field_numbers else "No HP"
+                            hp_value = row.get("NO HP", "")
                             new_hp = st.text_input(
-                                label_hp,
-                                value=row.get("NO HP", ""),
+                                label_hp + (" ✨" if hp_value else ""),  # Indicator jika auto-filled
+                                value=hp_value,
                                 key=f"hp_{idx}",
                                 placeholder="08XXXXXXXXXX",
-                                help="Tab untuk pindah ke Email"
+                                help="✨ = Auto-filled dari form text" if hp_value else "Tab untuk pindah ke Email"
                             )
                             if new_hp != row.get("NO HP", ""):
                                 st.session_state.data_db[idx]["NO HP"] = new_hp
                         
                         label_email = "6️⃣ Email" if show_field_numbers else "Email"
+                        email_value = row.get("EMAIL", "")
                         new_email = st.text_input(
-                            label_email,
-                            value=row.get("EMAIL", ""),
+                            label_email + (" ✨" if email_value else ""),  # Indicator jika auto-filled
+                            value=email_value,
                             key=f"email_{idx}",
                             placeholder="email@example.com",
-                            help="Field terakhir"
+                            help="✨ = Auto-filled dari form text" if email_value else "Field terakhir"
                         )
                         if new_email != row.get("EMAIL", ""):
                             st.session_state.data_db[idx]["EMAIL"] = new_email
                         
+                        # Status validation dengan info auto-fill
+                        auto_filled_count = sum([1 for x in [ibu_value, hp_value, email_value] if x])
                         if new_nama and new_nik:
-                            st.success("✅ Data lengkap tersimpan otomatis")
+                            if auto_filled_count > 0:
+                                st.success(f"✅ Data lengkap | {auto_filled_count} field auto-filled ✨")
+                            else:
+                                st.success("✅ Data lengkap tersimpan otomatis")
                         elif new_nama or new_nik:
                             st.warning("⚠️ Data belum lengkap")
                     
